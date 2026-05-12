@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { pb } from "../lib/pb";
-import { buildFxLookup, type FxRate } from "../lib/fx";
+import { buildFxLookup, upsertFxRate, type FxRate } from "../lib/fx";
 import {
   buildTaxReport,
   listAvailableYears,
@@ -95,6 +95,17 @@ export function TaxReport() {
 
   const activeYear = year ?? availableYears[0];
 
+  const reloadFxRates = async () => {
+    const fxRows = await pb.collection("fx_rates").getFullList<FxRecord>();
+    const fxRates: FxRate[] = fxRows.map((r) => ({
+      date: r.date.slice(0, 10),
+      usd_jpy: r.usd_jpy,
+    }));
+    setState((prev) =>
+      prev.status === "ready" ? { ...prev, fxRates } : prev
+    );
+  };
+
   return (
     <ReportView
       year={activeYear}
@@ -102,6 +113,7 @@ export function TaxReport() {
       onChangeYear={setYear}
       trades={state.trades}
       fxRates={state.fxRates}
+      onFxChanged={reloadFxRates}
     />
   );
 }
@@ -112,18 +124,51 @@ function ReportView({
   onChangeYear,
   trades,
   fxRates,
+  onFxChanged,
 }: {
   year: number;
   availableYears: number[];
   onChangeYear: (y: number) => void;
   trades: TaxTradeInput[];
   fxRates: FxRate[];
+  onFxChanged: () => Promise<void>;
 }) {
   const lookup = useMemo(() => buildFxLookup(fxRates), [fxRates]);
   const report = useMemo(
     () => buildTaxReport(trades, lookup, year),
     [trades, lookup, year]
   );
+
+  const [editingDate, setEditingDate] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const startEdit = (date: string, current: number | null) => {
+    setEditingDate(date);
+    setEditValue(current != null ? current.toFixed(3) : "");
+  };
+  const cancelEdit = () => {
+    setEditingDate(null);
+    setEditValue("");
+  };
+  const saveEdit = async () => {
+    if (!editingDate) return;
+    const value = Number(editValue);
+    if (!isFinite(value) || value <= 0) {
+      alert("レートが不正です");
+      return;
+    }
+    setSaving(true);
+    try {
+      await upsertFxRate(editingDate, value);
+      await onFxChanged();
+      cancelEdit();
+    } catch (e) {
+      alert(`保存失敗: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleExport = () => {
     const csv = toCsv(report);
@@ -328,22 +373,73 @@ function ReportView({
                     {r.pnl_usd.toFixed(4)}
                   </td>
                   <td style={tdRight}>
-                    {r.fx_rate != null ? (
+                    {editingDate === r.date ? (
                       <span
+                        style={{
+                          display: "inline-flex",
+                          gap: 4,
+                          alignItems: "center",
+                        }}
+                      >
+                        <input
+                          autoFocus
+                          type="number"
+                          step="0.001"
+                          min="0.001"
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveEdit();
+                            if (e.key === "Escape") cancelEdit();
+                          }}
+                          style={inlineInput}
+                          disabled={saving}
+                        />
+                        <button
+                          type="button"
+                          onClick={saveEdit}
+                          disabled={saving}
+                          style={btnInlinePrimary}
+                          title="保存 (Enter)"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelEdit}
+                          disabled={saving}
+                          style={btnInlineGhost}
+                          title="キャンセル (Esc)"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ) : r.fx_rate != null ? (
+                      <span
+                        onClick={() => startEdit(r.date, r.fx_rate)}
                         title={
                           r.fx_carried_forward
-                            ? `${r.fx_date} のレートを適用`
-                            : undefined
+                            ? `${r.fx_date} のレートを carry-forward 中。クリックで ${r.date} のレートを直接登録`
+                            : "クリックして編集"
                         }
                         style={{
                           color: r.fx_carried_forward ? "#f5d678" : "#aab",
+                          cursor: "pointer",
+                          borderBottom: "1px dotted #555",
                         }}
                       >
                         {r.fx_rate.toFixed(3)}
                         {r.fx_carried_forward && "*"}
                       </span>
                     ) : (
-                      <span style={{ color: "#ff8c8c" }}>未登録</span>
+                      <button
+                        type="button"
+                        onClick={() => startEdit(r.date, null)}
+                        style={btnInlineMissing}
+                        title="この日のレートを入力"
+                      >
+                        + 入力
+                      </button>
                     )}
                   </td>
                   <td
@@ -369,7 +465,8 @@ function ReportView({
           </table>
         )}
         <p style={{ color: "#888", fontSize: "0.8rem", marginTop: 8 }}>
-          * 印は当日のレート未登録のため直近過去のレートで換算した行です。
+          USD/JPY 列をクリックすると、その日のレートを直接登録できます
+          (同じ日付の取引すべてに自動反映されます)。* 印は当日のレート未登録のため直近過去のレートで換算した行。
         </p>
       </section>
     </div>
@@ -498,4 +595,41 @@ const tdRight: React.CSSProperties = {
   ...td,
   textAlign: "right",
   fontVariantNumeric: "tabular-nums",
+};
+const inlineInput: React.CSSProperties = {
+  background: "#0f1218",
+  color: "#e6e6e6",
+  border: "1px solid #2a3047",
+  borderRadius: 4,
+  padding: "0.15rem 0.35rem",
+  width: 80,
+  textAlign: "right",
+  fontVariantNumeric: "tabular-nums",
+};
+const btnInlinePrimary: React.CSSProperties = {
+  background: "#2563eb",
+  color: "#fff",
+  border: "none",
+  borderRadius: 4,
+  padding: "0.15rem 0.45rem",
+  cursor: "pointer",
+  fontSize: "0.85rem",
+};
+const btnInlineGhost: React.CSSProperties = {
+  background: "transparent",
+  color: "#aab",
+  border: "1px solid #2a3047",
+  borderRadius: 4,
+  padding: "0.15rem 0.45rem",
+  cursor: "pointer",
+  fontSize: "0.85rem",
+};
+const btnInlineMissing: React.CSSProperties = {
+  background: "transparent",
+  color: "#f5d678",
+  border: "1px dashed #6b522a",
+  borderRadius: 4,
+  padding: "0.15rem 0.5rem",
+  cursor: "pointer",
+  fontSize: "0.8rem",
 };

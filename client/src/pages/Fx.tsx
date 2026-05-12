@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { pb } from "../lib/pb";
-import { parseBulkFxInput } from "../lib/fx";
+import { parseBulkFxInput, upsertFxRate } from "../lib/fx";
 
 interface FxRow {
   id: string;
@@ -10,36 +10,7 @@ interface FxRow {
 }
 
 function dateOnly(s: string): string {
-  // Accept "YYYY-MM-DD ..." or "YYYY-MM-DDT..." and return "YYYY-MM-DD".
   return s.slice(0, 10);
-}
-
-async function upsertRate(date: string, usd_jpy: number) {
-  // PocketBase date field accepts ISO timestamps. Use UTC midnight to keep
-  // the displayed date stable across timezones.
-  const isoDate = `${date} 00:00:00.000Z`;
-  try {
-    const existing = await pb
-      .collection("fx_rates")
-      .getFirstListItem(`date >= "${date}" && date < "${nextDay(date)}"`);
-    await pb.collection("fx_rates").update(existing.id, {
-      date: isoDate,
-      usd_jpy,
-      source: "manual",
-    });
-  } catch {
-    await pb.collection("fx_rates").create({
-      date: isoDate,
-      usd_jpy,
-      source: "manual",
-    });
-  }
-}
-
-function nextDay(date: string): string {
-  const d = new Date(`${date}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + 1);
-  return d.toISOString().slice(0, 10);
 }
 
 export function Fx() {
@@ -91,7 +62,7 @@ export function Fx() {
       return;
     }
     try {
-      await upsertRate(singleDate, value);
+      await upsertFxRate(singleDate, value);
       setSingleValue("");
       await reload();
     } catch (e) {
@@ -109,7 +80,7 @@ export function Fx() {
     let added = 0;
     try {
       for (const r of rates) {
-        await upsertRate(r.date, r.usd_jpy);
+        await upsertFxRate(r.date, r.usd_jpy);
         added++;
       }
       setBulkText("");
