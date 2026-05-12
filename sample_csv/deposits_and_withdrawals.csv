@@ -1,0 +1,6 @@
+time,action,source,destination,accountValueChange,fee
+2026/3/23 23:48:38,send,trading,trading,49.998173 USDC,1 USDC
+2026/3/24 8:13:54,send,trading,trading,49.964292 USDC,0 USDC
+2026/4/8 12:08:39,send,trading,trading,100.003577 USDC,0 USDC
+2026/4/13 9:52:33,send,trading,trading,119.99702 USDC,0 USDC
+2026/4/14 8:22:36,send,trading,trading,278 USDC,0 USDC

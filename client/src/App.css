@@ -1,0 +1,31 @@
+body {
+  margin: 0;
+  background: #0f1115;
+  color: #e6e6e6;
+}
+
+main {
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+h1 {
+  margin: 0;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+  color: #aab;
+}
+
+code {
+  background: #1c2030;
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  font-size: 0.95em;
+}
+
+a {
+  color: #6cf;
+}
