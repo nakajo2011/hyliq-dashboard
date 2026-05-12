@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Dropzone } from "../components/Dropzone";
 import { StagedFileCard, type StagedFile } from "../components/StagedFileCard";
+import { pb } from "../lib/pb";
 import {
   detectCsvKind,
   parseFundingCsv,
@@ -11,18 +12,16 @@ import {
 } from "../lib/csv";
 import { commitGroup, type CommitGroupResult } from "../lib/persistence";
 
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
-
 type RawFile = StagedFile & { rawText: string };
 
-async function parseWithAddress(
+async function parseWithAccount(
   rawText: string,
   kind: CsvKind,
-  address: string
+  accountName: string
 ) {
-  if (kind === "trade") return parseTradeCsv(rawText, address);
-  if (kind === "funding") return parseFundingCsv(rawText, address);
-  return parseTransferCsv(rawText, address);
+  if (kind === "trade") return parseTradeCsv(rawText, accountName);
+  if (kind === "funding") return parseFundingCsv(rawText, accountName);
+  return parseTransferCsv(rawText, accountName);
 }
 
 type CommitState =
@@ -37,11 +36,40 @@ const KIND_LABEL: Record<CsvKind, string> = {
   transfer: "入出金",
 };
 
+interface ExistingAccount {
+  id: string;
+  name: string;
+}
+
 export function Upload() {
   const [files, setFiles] = useState<RawFile[]>([]);
   const [commitState, setCommitState] = useState<CommitState>({
     status: "idle",
   });
+  const [existingAccounts, setExistingAccounts] = useState<ExistingAccount[]>(
+    []
+  );
+  const datalistId = useId();
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const list = await pb
+          .collection("accounts")
+          .getFullList<ExistingAccount>({ sort: "name", fields: "id,name" });
+        if (!cancelled) setExistingAccounts(list);
+      } catch {
+        // It's fine if this fails — the combobox just won't have suggestions.
+      }
+    };
+    refresh();
+    return () => {
+      cancelled = true;
+    };
+  }, [commitState.status]);
+
+  const existingNames = existingAccounts.map((a) => a.name);
 
   const handleFiles = async (incoming: File[]) => {
     const next: RawFile[] = await Promise.all(
@@ -64,11 +92,10 @@ export function Upload() {
           rawText: text,
           kind: detection.kind,
           detectionReason: detection.reason,
-          address: detection.detectedAddress ?? "",
-          addressLocked: Boolean(detection.detectedAddress),
+          accountName: "",
           rows: [],
           parseErrors: [],
-          status: "detecting",
+          status: "needs-account",
         };
 
         if (!detection.kind) {
@@ -79,59 +106,31 @@ export function Upload() {
           };
         }
 
-        if (!base.address) {
-          return { ...base, status: "needs-address" };
-        }
-
-        if (!ADDRESS_RE.test(base.address)) {
-          return {
-            ...base,
-            status: "error",
-            errorMessage: "アドレス形式が不正です",
-          };
-        }
-
-        try {
-          const result = await parseWithAddress(text, detection.kind, base.address);
-          return {
-            ...base,
-            rows: result.rows,
-            parseErrors: result.errors,
-            status: "ready",
-          };
-        } catch (e) {
-          return {
-            ...base,
-            status: "error",
-            errorMessage: e instanceof Error ? e.message : String(e),
-          };
-        }
+        return base;
       })
     );
     setFiles((prev) => [...prev, ...next]);
   };
 
-  const handleChangeAddress = async (id: string, address: string) => {
+  const handleChangeAccountName = async (id: string, accountName: string) => {
     setFiles((prev) =>
-      prev.map((f) =>
-        f.id === id ? { ...f, address, status: "detecting" } : f
-      )
+      prev.map((f) => (f.id === id ? { ...f, accountName } : f))
     );
 
     const current = files.find((f) => f.id === id);
     if (!current || !current.kind) return;
 
-    if (!ADDRESS_RE.test(address)) {
+    if (!accountName.trim()) {
       setFiles((prev) =>
         prev.map((f) =>
           f.id === id
             ? {
                 ...f,
-                address,
-                status: address ? "error" : "needs-address",
-                errorMessage: address ? "アドレス形式が不正です" : undefined,
+                accountName,
+                status: "needs-account",
                 rows: [],
                 parseErrors: [],
+                errorMessage: undefined,
               }
             : f
         )
@@ -140,17 +139,17 @@ export function Upload() {
     }
 
     try {
-      const result = await parseWithAddress(
+      const result = await parseWithAccount(
         current.rawText,
         current.kind,
-        address
+        accountName
       );
       setFiles((prev) =>
         prev.map((f) =>
           f.id === id
             ? {
                 ...f,
-                address,
+                accountName,
                 rows: result.rows,
                 parseErrors: result.errors,
                 status: "ready",
@@ -165,7 +164,7 @@ export function Upload() {
           f.id === id
             ? {
                 ...f,
-                address,
+                accountName,
                 status: "error",
                 errorMessage: e instanceof Error ? e.message : String(e),
               }
@@ -184,14 +183,14 @@ export function Upload() {
       const ready = files.filter((f) => f.status === "ready" && f.kind);
       const groups = new Map<
         string,
-        { kind: CsvKind; address: string; rows: ParsedRow[] }
+        { kind: CsvKind; accountName: string; rows: ParsedRow[] }
       >();
       for (const f of ready) {
         if (!f.kind) continue;
-        const key = `${f.kind}::${f.address.toLowerCase()}`;
+        const key = `${f.kind}::${f.accountName.trim().toLowerCase()}`;
         const entry = groups.get(key) ?? {
           kind: f.kind,
-          address: f.address,
+          accountName: f.accountName.trim(),
           rows: [],
         };
         entry.rows.push(...f.rows);
@@ -200,12 +199,11 @@ export function Upload() {
 
       const results: CommitGroupResult[] = [];
       for (const g of groups.values()) {
-        const res = await commitGroup(g.address, g.kind, g.rows);
+        const res = await commitGroup(g.accountName, g.kind, g.rows);
         results.push(res);
       }
 
       setCommitState({ status: "done", results });
-      // Clear successfully committed files
       setFiles([]);
     } catch (e) {
       setCommitState({
@@ -226,6 +224,7 @@ export function Upload() {
       <h1 style={{ marginTop: 0 }}>Upload</h1>
       <p style={{ color: "#888" }}>
         Hyperliquid からエクスポートした CSV をアップロードして取り込みます。
+        既存アカウントへの追記、または新規アカウントの登録ができます。
       </p>
 
       <Dropzone onFiles={handleFiles} />
@@ -262,9 +261,8 @@ export function Upload() {
                 key={`${r.accountId}-${r.kind}`}
                 style={{ fontSize: "0.92rem", marginTop: 6 }}
               >
-                <code>{r.address.slice(0, 10)}…</code> /{" "}
-                {KIND_LABEL[r.kind]}: 新規 {r.inserted} 件、重複スキップ{" "}
-                {r.skippedDuplicates} 件
+                <strong>{r.accountName}</strong> / {KIND_LABEL[r.kind]}: 新規{" "}
+                {r.inserted} 件、重複スキップ {r.skippedDuplicates} 件
                 {r.failed > 0 && (
                   <span style={{ color: "#ff6b6b" }}>
                     {" "}
@@ -346,11 +344,20 @@ export function Upload() {
             </button>
           </div>
 
+          {/* Shared datalist for all combobox inputs */}
+          <datalist id={datalistId}>
+            {existingAccounts.map((a) => (
+              <option key={a.id} value={a.name} />
+            ))}
+          </datalist>
+
           {files.map((f) => (
             <StagedFileCard
               key={f.id}
               file={f}
-              onChangeAddress={handleChangeAddress}
+              existingNames={existingNames}
+              datalistId={datalistId}
+              onChangeAccountName={handleChangeAccountName}
               onRemove={handleRemove}
             />
           ))}

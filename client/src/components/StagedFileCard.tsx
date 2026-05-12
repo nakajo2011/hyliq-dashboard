@@ -6,12 +6,10 @@ export type StagedFile = {
   size: number;
   kind: CsvKind | null;
   detectionReason: string;
-  address: string;
-  /** True if we extracted the address from filename (locked for editing). */
-  addressLocked: boolean;
+  accountName: string;
   rows: ParsedRow[];
   parseErrors: { line: number; message: string }[];
-  status: "detecting" | "needs-address" | "ready" | "error";
+  status: "detecting" | "needs-account" | "ready" | "error";
   errorMessage?: string;
 };
 
@@ -23,11 +21,22 @@ const KIND_LABEL: Record<CsvKind, string> = {
 
 interface Props {
   file: StagedFile;
-  onChangeAddress: (id: string, address: string) => void;
+  /** Names of accounts already in the DB, suggested in the combobox. */
+  existingNames: string[];
+  /** datalist id to wire the combobox up to the shared options list. */
+  datalistId: string;
+  onChangeAccountName: (id: string, name: string) => void;
   onRemove: (id: string) => void;
 }
 
-export function StagedFileCard({ file, onChangeAddress, onRemove }: Props) {
+export function StagedFileCard({
+  file,
+  existingNames,
+  datalistId,
+  onChangeAccountName,
+  onRemove,
+}: Props) {
+  const isExisting = existingNames.includes(file.accountName.trim());
   return (
     <div
       style={{
@@ -80,38 +89,42 @@ export function StagedFileCard({ file, onChangeAddress, onRemove }: Props) {
 
       <div style={{ marginTop: "0.8rem" }}>
         <label style={{ fontSize: "0.85rem", color: "#aab" }}>
-          アカウントアドレス{" "}
-          {file.addressLocked && (
-            <span style={{ color: "#5dd58c" }}>
-              (ファイル名から自動抽出)
+          アカウント名{" "}
+          {file.accountName.trim() && (
+            <span
+              style={{
+                color: isExisting ? "#5dd58c" : "#f5b942",
+                fontSize: "0.78rem",
+              }}
+            >
+              ({isExisting ? "既存アカウント" : "新規アカウント"})
             </span>
           )}
         </label>
         <input
           type="text"
-          value={file.address}
-          onChange={(e) => onChangeAddress(file.id, e.target.value)}
-          disabled={file.addressLocked}
-          placeholder="0x..."
+          list={datalistId}
+          value={file.accountName}
+          onChange={(e) => onChangeAccountName(file.id, e.target.value)}
+          placeholder="既存アカウントを選択、または新しいアカウント名を入力"
           style={{
             display: "block",
             width: "100%",
             marginTop: 4,
             padding: "0.45rem 0.6rem",
-            background: file.addressLocked ? "#1a1f2c" : "#0f1218",
+            background: "#0f1218",
             color: "#e6e6e6",
             border: "1px solid #2a3047",
             borderRadius: 6,
-            fontFamily: "monospace",
           }}
         />
       </div>
 
       <div style={{ marginTop: "0.8rem", fontSize: "0.9rem" }}>
         {file.status === "detecting" && <span>解析中...</span>}
-        {file.status === "needs-address" && (
+        {file.status === "needs-account" && (
           <span style={{ color: "#f5b942" }}>
-            アカウントアドレスを入力してください
+            アカウント名を入力してください
           </span>
         )}
         {file.status === "error" && (

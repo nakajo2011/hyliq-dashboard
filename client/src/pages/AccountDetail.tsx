@@ -30,8 +30,8 @@ import type {
 
 interface AccountRecord {
   id: string;
+  name: string;
   address: string;
-  label: string;
   note: string;
 }
 
@@ -140,10 +140,8 @@ function AccountDetailReady({
           ← Accounts
         </Link>
       </div>
-      <h1 style={{ marginTop: 0, wordBreak: "break-all" }}>
-        {account.label || account.address}
-      </h1>
-      {account.label && (
+      <h1 style={{ marginTop: 0, wordBreak: "break-all" }}>{account.name}</h1>
+      {account.address && (
         <div
           style={{
             color: "#888",

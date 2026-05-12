@@ -26,8 +26,8 @@ import type {
 
 interface AccountRow {
   id: string;
+  name: string;
   address: string;
-  label: string;
 }
 type TradeRow = TradeLike & { id: string; account: string };
 type FundingRow = FundingLike & { id: string; account: string };
@@ -67,7 +67,7 @@ export function Home() {
       try {
         const accounts = await pb
           .collection("accounts")
-          .getFullList<AccountRow>({ sort: "address" });
+          .getFullList<AccountRow>({ sort: "name" });
         if (accounts.length === 0) {
           if (!cancelled) setState({ status: "no-data", healthOk: true });
           return;
@@ -274,7 +274,7 @@ function AccountsBreakdown({
     >
       <thead>
         <tr style={{ borderBottom: "1px solid #2a3047", color: "#aab" }}>
-          <th style={th}>アドレス</th>
+          <th style={th}>アカウント名</th>
           <th style={{ ...th, textAlign: "right" }}>取引数</th>
           <th style={{ ...th, textAlign: "right" }}>実現 PnL</th>
           <th style={{ ...th, textAlign: "right" }}>手数料</th>
@@ -285,12 +285,12 @@ function AccountsBreakdown({
       <tbody>
         {rows.map((r) => (
           <tr key={r.id} style={{ borderBottom: "1px solid #1a1f2c" }}>
-            <td style={{ ...td, fontFamily: "monospace" }}>
+            <td style={td}>
               <Link
                 to={`/accounts/${r.id}`}
                 style={{ color: "#6cf", textDecoration: "none" }}
               >
-                {r.label || `${r.address.slice(0, 10)}...${r.address.slice(-6)}`}
+                {r.name}
               </Link>
             </td>
             <td style={tdRight}>{r.tradeCount}</td>

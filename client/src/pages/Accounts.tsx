@@ -4,8 +4,8 @@ import { pb } from "../lib/pb";
 
 interface AccountRow {
   id: string;
+  name: string;
   address: string;
-  label: string;
   note: string;
   trades: number;
   fundings: number;
@@ -14,15 +14,15 @@ interface AccountRow {
 
 interface RawAccount {
   id: string;
-  address: string;
-  label?: string;
+  name: string;
+  address?: string;
   note?: string;
 }
 
 async function fetchAccountsWithCounts(): Promise<AccountRow[]> {
   const accounts = await pb
     .collection("accounts")
-    .getFullList<RawAccount>({ sort: "address" });
+    .getFullList<RawAccount>({ sort: "name" });
 
   const rows = await Promise.all(
     accounts.map(async (a) => {
@@ -45,8 +45,8 @@ async function fetchAccountsWithCounts(): Promise<AccountRow[]> {
       ]);
       return {
         id: a.id,
-        address: a.address,
-        label: a.label ?? "",
+        name: a.name,
+        address: a.address ?? "",
         note: a.note ?? "",
         trades,
         fundings,
@@ -57,13 +57,17 @@ async function fetchAccountsWithCounts(): Promise<AccountRow[]> {
   return rows;
 }
 
+type EditState =
+  | { field: "name"; value: string }
+  | { field: "address"; value: string };
+
 export function Accounts() {
   const [state, setState] = useState<
     | { status: "loading" }
     | { status: "ready"; rows: AccountRow[] }
     | { status: "error"; message: string }
   >({ status: "loading" });
-  const [editing, setEditing] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState<Record<string, EditState>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
   const reload = async () => {
@@ -83,16 +87,28 @@ export function Accounts() {
     reload();
   }, []);
 
-  const saveLabel = async (id: string) => {
-    const newLabel = editing[id] ?? "";
+  const startEdit = (id: string, field: EditState["field"], value: string) => {
+    setEditing((prev) => ({ ...prev, [id]: { field, value } }));
+  };
+  const cancelEdit = (id: string) => {
+    setEditing((prev) => {
+      const n = { ...prev };
+      delete n[id];
+      return n;
+    });
+  };
+  const save = async (id: string) => {
+    const cur = editing[id];
+    if (!cur) return;
+    const value = cur.value.trim();
+    if (cur.field === "name" && !value) {
+      alert("アカウント名は必須です");
+      return;
+    }
     setBusy(id);
     try {
-      await pb.collection("accounts").update(id, { label: newLabel });
-      setEditing((prev) => {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
+      await pb.collection("accounts").update(id, { [cur.field]: value });
+      cancelEdit(id);
       await reload();
     } catch (e) {
       alert(`保存失敗: ${e instanceof Error ? e.message : String(e)}`);
@@ -103,10 +119,11 @@ export function Accounts() {
 
   const removeAccount = async (row: AccountRow) => {
     const total = row.trades + row.fundings + row.transfers;
+    const label = row.name || row.address || row.id;
     const msg =
       total > 0
-        ? `${row.address}\n\n関連データ ${total} 件も全て削除されます。本当に削除しますか？`
-        : `${row.address}\n\nこのアカウントを削除しますか？`;
+        ? `${label}\n\n関連データ ${total} 件も全て削除されます。本当に削除しますか？`
+        : `${label}\n\nこのアカウントを削除しますか？`;
     if (!window.confirm(msg)) return;
 
     setBusy(row.id);
@@ -124,7 +141,7 @@ export function Accounts() {
     <div>
       <h1 style={{ marginTop: 0 }}>Accounts</h1>
       <p style={{ color: "#888" }}>
-        登録済みアカウント一覧。ラベルを付けて識別しやすくできます。削除時は関連データ
+        登録済みアカウント一覧。アカウント名・アドレスはクリックで編集できます。削除時は関連データ
         (trades / fundings / transfers) も cascade で削除されます。
       </p>
 
@@ -135,7 +152,8 @@ export function Accounts() {
 
       {state.status === "ready" && state.rows.length === 0 && (
         <p style={{ color: "#888" }}>
-          まだアカウントがありません。<Link to="/upload">Upload</Link> から CSV を取り込むと自動で登録されます。
+          まだアカウントがありません。<Link to="/upload">Upload</Link>{" "}
+          から CSV を取り込むと自動で登録されます。
         </p>
       )}
 
@@ -150,8 +168,8 @@ export function Accounts() {
         >
           <thead>
             <tr style={{ borderBottom: "1px solid #2a3047", color: "#aab" }}>
-              <th style={th}>アドレス</th>
-              <th style={th}>ラベル</th>
+              <th style={th}>アカウント名</th>
+              <th style={th}>アドレス (任意)</th>
               <th style={{ ...th, textAlign: "right" }}>Trades</th>
               <th style={{ ...th, textAlign: "right" }}>Fundings</th>
               <th style={{ ...th, textAlign: "right" }}>Transfers</th>
@@ -160,70 +178,72 @@ export function Accounts() {
           </thead>
           <tbody>
             {state.rows.map((row) => {
-              const isEditing = editing[row.id] !== undefined;
+              const edit = editing[row.id];
+              const editingName = edit?.field === "name";
+              const editingAddress = edit?.field === "address";
               return (
-                <tr
-                  key={row.id}
-                  style={{ borderBottom: "1px solid #1a1f2c" }}
-                >
-                  <td style={{ ...td, fontFamily: "monospace" }}>
-                    <Link
-                      to={`/accounts/${row.id}`}
-                      style={{ color: "#6cf", textDecoration: "none" }}
-                    >
-                      {row.address}
-                    </Link>
-                  </td>
+                <tr key={row.id} style={{ borderBottom: "1px solid #1a1f2c" }}>
                   <td style={td}>
-                    {isEditing ? (
-                      <input
-                        autoFocus
-                        type="text"
-                        value={editing[row.id]}
-                        onChange={(e) =>
+                    {editingName ? (
+                      <EditCell
+                        value={edit.value}
+                        onChange={(v) =>
                           setEditing((prev) => ({
                             ...prev,
-                            [row.id]: e.target.value,
+                            [row.id]: { field: "name", value: v },
                           }))
                         }
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") saveLabel(row.id);
-                          if (e.key === "Escape")
-                            setEditing((prev) => {
-                              const n = { ...prev };
-                              delete n[row.id];
-                              return n;
-                            });
+                        onSave={() => save(row.id)}
+                        onCancel={() => cancelEdit(row.id)}
+                      />
+                    ) : (
+                      <Link
+                        to={`/accounts/${row.id}`}
+                        style={{
+                          color: "#6cf",
+                          textDecoration: "none",
+                          fontWeight: 500,
                         }}
-                        style={inputStyle}
+                      >
+                        {row.name}
+                      </Link>
+                    )}
+                  </td>
+                  <td style={{ ...td, fontFamily: "monospace" }}>
+                    {editingAddress ? (
+                      <EditCell
+                        value={edit.value}
+                        onChange={(v) =>
+                          setEditing((prev) => ({
+                            ...prev,
+                            [row.id]: { field: "address", value: v },
+                          }))
+                        }
+                        onSave={() => save(row.id)}
+                        onCancel={() => cancelEdit(row.id)}
                       />
                     ) : (
                       <span
-                        onClick={() =>
-                          setEditing((prev) => ({
-                            ...prev,
-                            [row.id]: row.label,
-                          }))
-                        }
+                        onClick={() => startEdit(row.id, "address", row.address)}
                         style={{
                           cursor: "pointer",
-                          color: row.label ? "#e6e6e6" : "#666",
+                          color: row.address ? "#aab" : "#555",
                         }}
                         title="クリックで編集"
                       >
-                        {row.label || "(未設定)"}
+                        {row.address || "(未設定)"}
                       </span>
                     )}
                   </td>
-                  <td style={{ ...td, textAlign: "right" }}>{row.trades}</td>
-                  <td style={{ ...td, textAlign: "right" }}>{row.fundings}</td>
-                  <td style={{ ...td, textAlign: "right" }}>{row.transfers}</td>
-                  <td style={{ ...td, textAlign: "right" }}>
-                    {isEditing ? (
+                  <td style={tdRight}>{row.trades}</td>
+                  <td style={tdRight}>{row.fundings}</td>
+                  <td style={tdRight}>{row.transfers}</td>
+                  <td style={tdRight}>
+                    {edit ? (
                       <>
                         <button
                           type="button"
-                          onClick={() => saveLabel(row.id)}
+                          onClick={() => save(row.id)}
                           disabled={busy === row.id}
                           style={btnPrimary}
                         >
@@ -231,27 +251,30 @@ export function Accounts() {
                         </button>
                         <button
                           type="button"
-                          onClick={() =>
-                            setEditing((prev) => {
-                              const n = { ...prev };
-                              delete n[row.id];
-                              return n;
-                            })
-                          }
+                          onClick={() => cancelEdit(row.id)}
                           style={btnGhost}
                         >
                           キャンセル
                         </button>
                       </>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => removeAccount(row)}
-                        disabled={busy === row.id}
-                        style={btnDanger}
-                      >
-                        削除
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => startEdit(row.id, "name", row.name)}
+                          style={btnGhost}
+                        >
+                          名前を編集
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeAccount(row)}
+                          disabled={busy === row.id}
+                          style={btnDanger}
+                        >
+                          削除
+                        </button>
+                      </>
                     )}
                   </td>
                 </tr>
@@ -264,6 +287,32 @@ export function Accounts() {
   );
 }
 
+function EditCell({
+  value,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <input
+      autoFocus
+      type="text"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") onSave();
+        if (e.key === "Escape") onCancel();
+      }}
+      style={inputStyle}
+    />
+  );
+}
+
 const th: React.CSSProperties = {
   textAlign: "left",
   padding: "0.55rem 0.6rem",
@@ -272,12 +321,15 @@ const th: React.CSSProperties = {
   textTransform: "uppercase",
   letterSpacing: 0.5,
 };
-
 const td: React.CSSProperties = {
   padding: "0.6rem",
   verticalAlign: "middle",
 };
-
+const tdRight: React.CSSProperties = {
+  ...td,
+  textAlign: "right",
+  fontVariantNumeric: "tabular-nums",
+};
 const inputStyle: React.CSSProperties = {
   background: "#0f1218",
   color: "#e6e6e6",
@@ -286,7 +338,6 @@ const inputStyle: React.CSSProperties = {
   padding: "0.3rem 0.5rem",
   width: "100%",
 };
-
 const btnPrimary: React.CSSProperties = {
   background: "#2563eb",
   color: "#fff",
@@ -296,7 +347,6 @@ const btnPrimary: React.CSSProperties = {
   cursor: "pointer",
   marginRight: 6,
 };
-
 const btnGhost: React.CSSProperties = {
   background: "transparent",
   color: "#aab",
@@ -304,8 +354,8 @@ const btnGhost: React.CSSProperties = {
   borderRadius: 6,
   padding: "0.3rem 0.7rem",
   cursor: "pointer",
+  marginRight: 6,
 };
-
 const btnDanger: React.CSSProperties = {
   background: "transparent",
   color: "#ff8c8c",
