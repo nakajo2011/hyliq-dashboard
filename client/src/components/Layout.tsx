@@ -35,6 +35,9 @@ export function Layout() {
           <NavLink to="/fx" style={navItemStyle}>
             FX
           </NavLink>
+          <NavLink to="/reports/tax" style={navItemStyle}>
+            確定申告
+          </NavLink>
         </nav>
       </header>
       <main style={{ padding: "1.5rem", maxWidth: 1100, margin: "0 auto" }}>

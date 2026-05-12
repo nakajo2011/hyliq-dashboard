@@ -5,6 +5,7 @@ import { Upload } from "./pages/Upload";
 import { Accounts } from "./pages/Accounts";
 import { AccountDetail } from "./pages/AccountDetail";
 import { Fx } from "./pages/Fx";
+import { TaxReport } from "./pages/TaxReport";
 import "./App.css";
 
 function App() {
@@ -17,6 +18,7 @@ function App() {
           <Route path="accounts" element={<Accounts />} />
           <Route path="accounts/:id" element={<AccountDetail />} />
           <Route path="fx" element={<Fx />} />
+          <Route path="reports/tax" element={<TaxReport />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
