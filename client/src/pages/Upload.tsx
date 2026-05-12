@@ -260,7 +260,7 @@ export function Upload() {
             {commitState.results.map((r) => (
               <li
                 key={`${r.accountId}-${r.kind}`}
-                style={{ fontSize: "0.92rem", marginTop: 4 }}
+                style={{ fontSize: "0.92rem", marginTop: 6 }}
               >
                 <code>{r.address.slice(0, 10)}…</code> /{" "}
                 {KIND_LABEL[r.kind]}: 新規 {r.inserted} 件、重複スキップ{" "}
@@ -270,6 +270,37 @@ export function Upload() {
                     {" "}
                     / 失敗 {r.failed} 件
                   </span>
+                )}
+                {r.errors.length > 0 && (
+                  <details style={{ marginTop: 4 }}>
+                    <summary
+                      style={{
+                        cursor: "pointer",
+                        color: "#ff8c8c",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      失敗の詳細 ({r.errors.length} 件)
+                    </summary>
+                    <ul
+                      style={{
+                        marginTop: 4,
+                        marginBottom: 0,
+                        fontSize: "0.8rem",
+                        color: "#ffb3b3",
+                        fontFamily: "monospace",
+                      }}
+                    >
+                      {r.errors.slice(0, 10).map((err) => (
+                        <li key={err.hash}>
+                          {err.hash.slice(0, 8)}…: {err.message}
+                        </li>
+                      ))}
+                      {r.errors.length > 10 && (
+                        <li>...他 {r.errors.length - 10} 件</li>
+                      )}
+                    </ul>
+                  </details>
                 )}
               </li>
             ))}

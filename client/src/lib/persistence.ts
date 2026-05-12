@@ -27,23 +27,27 @@ export interface CommitGroupResult {
 }
 
 /**
- * Find existing account by address (case-insensitive) or create a new one.
- *
- * Addresses are stored as-given from the filename; we look up with
- * `address ~` to match case-insensitively without converting case.
+ * The PocketBase JS SDK auto-cancels concurrent requests that share the same
+ * URL (method + path) by default. When we fire many parallel `create()` calls
+ * against the same collection, all but the last one get aborted with
+ * "The request was aborted (most likely auto-cancelled)" and the inserts are
+ * silently lost. Passing `requestKey: null` opts that specific call out of the
+ * auto-cancel pool so true parallelism works.
  */
+const NO_CANCEL = { requestKey: null } as const;
+
 async function ensureAccount(address: string): Promise<{ id: string }> {
   const normalized = address.trim();
   try {
     const existing = await pb
       .collection("accounts")
-      .getFirstListItem(`address = "${normalized}"`);
+      .getFirstListItem(`address = "${normalized}"`, NO_CANCEL);
     return { id: existing.id };
   } catch (e) {
     // Not found → create
-    const created = await pb.collection("accounts").create({
-      address: normalized,
-    });
+    const created = await pb
+      .collection("accounts")
+      .create({ address: normalized }, NO_CANCEL);
     return { id: created.id };
   }
 }
@@ -56,6 +60,7 @@ async function fetchExistingHashes(
     filter: `account = "${accountId}"`,
     fields: "hash",
     batch: 500,
+    requestKey: null,
   });
   return new Set(list.map((r) => r.hash));
 }
@@ -145,7 +150,9 @@ export async function commitGroup(
 
   await chunkedAll(toInsert, 6, async (row) => {
     try {
-      await pb.collection(collection).create(toRecord(kind, account.id, row));
+      await pb
+        .collection(collection)
+        .create(toRecord(kind, account.id, row), NO_CANCEL);
       inserted++;
     } catch (e) {
       failed++;
