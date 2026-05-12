@@ -22,7 +22,7 @@ export function Layout() {
         }}
       >
         <strong style={{ fontSize: "1.05rem" }}>Hyliq Dashboard</strong>
-        <nav style={{ display: "flex", gap: "0.3rem" }}>
+        <nav style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
           <NavLink to="/" style={navItemStyle} end>
             Home
           </NavLink>
@@ -31,6 +31,9 @@ export function Layout() {
           </NavLink>
           <NavLink to="/accounts" style={navItemStyle}>
             Accounts
+          </NavLink>
+          <NavLink to="/fx" style={navItemStyle}>
+            FX
           </NavLink>
         </nav>
       </header>
