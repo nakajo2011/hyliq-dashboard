@@ -87,4 +87,53 @@ describe("commitGroup integration (live PocketBase)", () => {
     expect(second.skippedDuplicates).toBe(12);
     expect(second.failed).toBe(0);
   }, 30000);
+
+  it("parallel count queries return correct totals per account (Accounts page regression)", async () => {
+    // Seed both accounts
+    const text1 = readFileSync(
+      path.join(sampleDir, `trade_history_${TRADE_ADDR_1}.csv`),
+      "utf8"
+    );
+    const parsed1 = await parseTradeCsv(text1, TRADE_ADDR_1);
+    const text2 = readFileSync(
+      path.join(sampleDir, `trade_history_${TRADE_ADDR_2} (2).csv`),
+      "utf8"
+    );
+    const parsed2 = await parseTradeCsv(text2, TRADE_ADDR_2);
+
+    await commitGroup(TRADE_ADDR_1, "trade", parsed1.rows);
+    await commitGroup(TRADE_ADDR_2, "trade", parsed2.rows);
+
+    // Look up account IDs
+    const accounts = await pb
+      .collection("accounts")
+      .getFullList<{ id: string; address: string }>();
+
+    // Reproduce Accounts page behaviour: per-account, fire 3 parallel
+    // getList calls to the same collection paths. With autoCancellation on,
+    // requests for different accounts would cancel each other and return 0.
+    const counts = await Promise.all(
+      accounts.map(async (a) => {
+        const [trades, fundings, transfers] = await Promise.all([
+          pb
+            .collection("trades")
+            .getList(1, 1, { filter: `account = "${a.id}"` })
+            .then((r) => r.totalItems),
+          pb
+            .collection("fundings")
+            .getList(1, 1, { filter: `account = "${a.id}"` })
+            .then((r) => r.totalItems),
+          pb
+            .collection("transfers")
+            .getList(1, 1, { filter: `account = "${a.id}"` })
+            .then((r) => r.totalItems),
+        ]);
+        return { address: a.address, trades, fundings, transfers };
+      })
+    );
+
+    const byAddr = new Map(counts.map((c) => [c.address, c]));
+    expect(byAddr.get(TRADE_ADDR_1)?.trades).toBe(12);
+    expect(byAddr.get(TRADE_ADDR_2)?.trades).toBe(26);
+  }, 30000);
 });
