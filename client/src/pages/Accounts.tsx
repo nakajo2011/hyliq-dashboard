@@ -167,7 +167,12 @@ export function Accounts() {
                   style={{ borderBottom: "1px solid #1a1f2c" }}
                 >
                   <td style={{ ...td, fontFamily: "monospace" }}>
-                    {row.address}
+                    <Link
+                      to={`/accounts/${row.id}`}
+                      style={{ color: "#6cf", textDecoration: "none" }}
+                    >
+                      {row.address}
+                    </Link>
                   </td>
                   <td style={td}>
                     {isEditing ? (
