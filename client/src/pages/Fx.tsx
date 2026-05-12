@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { pb } from "../lib/pb";
-import { parseBulkFxInput, upsertFxRate } from "../lib/fx";
+import {
+  fetchFrankfurterRange,
+  parseBulkFxInput,
+  upsertFxRate,
+} from "../lib/fx";
+import { dateKeyJst } from "../lib/pnl";
 
 interface FxRow {
   id: string;
@@ -31,6 +36,22 @@ export function Fx() {
         status: "done";
         added: number;
         errors: { line: number; raw: string; message: string }[];
+      }
+    | { status: "error"; message: string }
+  >({ status: "idle" });
+
+  const [skipExisting, setSkipExisting] = useState(true);
+  const [rangeFrom, setRangeFrom] = useState("");
+  const [rangeTo, setRangeTo] = useState("");
+  const [apiStatus, setApiStatus] = useState<
+    | { status: "idle" }
+    | { status: "running" }
+    | {
+        status: "done";
+        range: string;
+        fetched: number;
+        saved: number;
+        skipped: number;
       }
     | { status: "error"; message: string }
   >({ status: "idle" });
@@ -94,6 +115,74 @@ export function Fx() {
     }
   };
 
+  const apiFetchAndStore = async (from: string, to: string) => {
+    setApiStatus({ status: "running" });
+    try {
+      const result = await fetchFrankfurterRange(from, to);
+
+      let existing = new Set<string>();
+      if (skipExisting) {
+        const list = await pb
+          .collection("fx_rates")
+          .getFullList<{ date: string }>({ fields: "date" });
+        existing = new Set(list.map((r) => dateOnly(r.date)));
+      }
+
+      let saved = 0;
+      let skipped = 0;
+      for (const r of result.rates) {
+        if (existing.has(r.date)) {
+          skipped++;
+        } else {
+          await upsertFxRate(r.date, r.usd_jpy);
+          saved++;
+        }
+      }
+
+      setApiStatus({
+        status: "done",
+        range: `${result.startDate} 〜 ${result.endDate}`,
+        fetched: result.rates.length,
+        saved,
+        skipped,
+      });
+      await reload();
+    } catch (e) {
+      setApiStatus({
+        status: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
+  const handleFetchTradeRange = async () => {
+    try {
+      const trades = await pb
+        .collection("trades")
+        .getFullList<{ time: string }>({ fields: "time", sort: "+time" });
+      if (trades.length === 0) {
+        alert("取引データがありません。Upload からインポートしてください。");
+        return;
+      }
+      const earliest = dateKeyJst(trades[0].time);
+      const latest = dateKeyJst(trades[trades.length - 1].time);
+      await apiFetchAndStore(earliest, latest);
+    } catch (e) {
+      setApiStatus({
+        status: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
+  const handleFetchManualRange = async () => {
+    if (!rangeFrom || !rangeTo) {
+      alert("期間を指定してください");
+      return;
+    }
+    await apiFetchAndStore(rangeFrom, rangeTo);
+  };
+
   const handleDelete = async (id: string) => {
     if (!window.confirm("このレートを削除しますか？")) return;
     try {
@@ -111,6 +200,120 @@ export function Fx() {
         確定申告レポートの JPY 換算に使う為替レートを日付別に登録します。
         該当日が無い場合は直近過去のレートが自動的に使われます (carry-forward)。
       </p>
+
+      <section style={section}>
+        <h2 style={h2}>API から取得 (Frankfurter / ECB)</h2>
+        <p style={{ color: "#888", fontSize: "0.85rem", marginTop: 0 }}>
+          Frankfurter API (ECB が公開する日次レート、無料・API キー不要) から USD/JPY を一括取得します。
+          週末・祝日は ECB が公開しないため欠落しますが、後段の carry-forward で吸収されます。
+          確定申告では原則 銀行公示 TTM レートですが、ECB ベースは実務上の目安として広く使われています。
+        </p>
+
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            marginBottom: 12,
+            fontSize: "0.9rem",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={skipExisting}
+            onChange={(e) => setSkipExisting(e.target.checked)}
+          />
+          既存レートを上書きしない
+        </label>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            flexWrap: "wrap",
+            marginBottom: "0.8rem",
+          }}
+        >
+          <button
+            type="button"
+            onClick={handleFetchTradeRange}
+            disabled={apiStatus.status === "running"}
+            style={apiStatus.status === "running" ? btnDisabled : btnPrimary}
+          >
+            {apiStatus.status === "running" ? "取得中..." : "取引日の全範囲を取得"}
+          </button>
+          <span style={{ color: "#666", fontSize: "0.85rem" }}>
+            ← 取引データの最古日〜最新日まで一括取得 (推奨)
+          </span>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "flex-end",
+            flexWrap: "wrap",
+          }}
+        >
+          <div>
+            <label style={lbl}>From</label>
+            <input
+              type="date"
+              value={rangeFrom}
+              onChange={(e) => setRangeFrom(e.target.value)}
+              style={input}
+            />
+          </div>
+          <div>
+            <label style={lbl}>To</label>
+            <input
+              type="date"
+              value={rangeTo}
+              onChange={(e) => setRangeTo(e.target.value)}
+              style={input}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleFetchManualRange}
+            disabled={
+              apiStatus.status === "running" || !rangeFrom || !rangeTo
+            }
+            style={
+              apiStatus.status === "running" || !rangeFrom || !rangeTo
+                ? btnDisabled
+                : btnPrimary
+            }
+          >
+            期間を取得
+          </button>
+        </div>
+
+        {apiStatus.status === "done" && (
+          <p
+            style={{
+              color: "#5dd58c",
+              marginTop: "0.8rem",
+              fontSize: "0.9rem",
+            }}
+          >
+            ✅ {apiStatus.range}: API から {apiStatus.fetched} 件取得 → 新規{" "}
+            {apiStatus.saved} 件、スキップ {apiStatus.skipped} 件
+          </p>
+        )}
+        {apiStatus.status === "error" && (
+          <p
+            style={{
+              color: "#ff6b6b",
+              marginTop: "0.8rem",
+              fontSize: "0.9rem",
+            }}
+          >
+            ❌ {apiStatus.message}
+          </p>
+        )}
+      </section>
 
       <section style={section}>
         <h2 style={h2}>レートを 1 件追加</h2>

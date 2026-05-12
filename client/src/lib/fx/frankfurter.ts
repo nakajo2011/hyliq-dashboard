@@ -1,6 +1,8 @@
 import type { FxRate } from "./types";
 
-const BASE_URL = "https://api.frankfurter.app";
+// Frankfurter moved to api.frankfurter.dev/v1 in 2025; the old .app host
+// returns a 301 redirect. Use the new host directly to skip the round-trip.
+const BASE_URL = "https://api.frankfurter.dev/v1";
 
 export interface FrankfurterFetchResult {
   /** The actual start date returned by the API (may differ slightly from requested). */

@@ -90,7 +90,7 @@ describe("fetchFrankfurterRange", () => {
     vi.stubGlobal("fetch", fetchMock);
     await fetchFrankfurterRange("2026-04-01", "2026-04-03");
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.frankfurter.app/2026-04-01..2026-04-03?from=USD&to=JPY"
+      "https://api.frankfurter.dev/v1/2026-04-01..2026-04-03?from=USD&to=JPY"
     );
   });
 });
