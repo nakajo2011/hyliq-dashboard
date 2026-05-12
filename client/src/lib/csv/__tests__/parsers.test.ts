@@ -11,6 +11,9 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const sampleDir = path.resolve(here, "../../../../../sample_csv");
 
+// These look like addresses but in the new model they're just account-name
+// strings (the file's address-based filename only tells us where the data
+// came from — the user could name the account anything).
 const tradeAddr1 = "0x6b94D8192eD3691a2b66c942fd1775022CbDb5b4";
 const tradeAddr2 = "0xA929Bd1dC1dC0DfA244F99350B9b698c9b493770";
 

@@ -47,6 +47,4 @@ export interface ParseResult<T extends ParsedRow> {
   kind: CsvKind;
   rows: T[];
   errors: { line: number; message: string }[];
-  /** Auto-detected account address (only set for trade history files) */
-  detectedAddress?: string;
 }

@@ -14,7 +14,7 @@ const COLLECTION_BY_KIND: Record<CsvKind, string> = {
 };
 
 export interface CommitGroupResult {
-  address: string;
+  accountName: string;
   kind: CsvKind;
   accountId: string;
   /** New rows actually written to the DB. */
@@ -36,18 +36,19 @@ export interface CommitGroupResult {
  */
 const NO_CANCEL = { requestKey: null } as const;
 
-async function ensureAccount(address: string): Promise<{ id: string }> {
-  const normalized = address.trim();
+async function ensureAccount(accountName: string): Promise<{ id: string }> {
+  const normalized = accountName.trim();
+  if (!normalized) throw new Error("アカウント名が空です");
   try {
     const existing = await pb
       .collection("accounts")
-      .getFirstListItem(`address = "${normalized}"`, NO_CANCEL);
+      .getFirstListItem(`name = "${normalized}"`, NO_CANCEL);
     return { id: existing.id };
   } catch (e) {
     // Not found → create
     const created = await pb
       .collection("accounts")
-      .create({ address: normalized }, NO_CANCEL);
+      .create({ name: normalized }, NO_CANCEL);
     return { id: created.id };
   }
 }
@@ -123,11 +124,11 @@ async function chunkedAll<T>(
 }
 
 export async function commitGroup(
-  address: string,
+  accountName: string,
   kind: CsvKind,
   rows: ParsedRow[]
 ): Promise<CommitGroupResult> {
-  const account = await ensureAccount(address);
+  const account = await ensureAccount(accountName);
   const collection = COLLECTION_BY_KIND[kind];
   const existing = await fetchExistingHashes(collection, account.id);
 
@@ -164,7 +165,7 @@ export async function commitGroup(
   });
 
   return {
-    address,
+    accountName,
     kind,
     accountId: account.id,
     inserted,

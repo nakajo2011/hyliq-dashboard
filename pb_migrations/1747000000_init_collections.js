@@ -3,6 +3,8 @@
 migrate(
   (app) => {
     // ---------- accounts ----------
+    // `name` is the user-chosen identifier (must be entered on upload, not auto-derived).
+    // `address` is optional metadata so users can record the ETH/wallet address if desired.
     const accounts = new Collection({
       name: "accounts",
       type: "base",
@@ -12,14 +14,14 @@ migrate(
       updateRule: "",
       deleteRule: "",
       fields: [
-        { name: "address", type: "text", required: true, max: 100 },
-        { name: "label", type: "text", max: 100 },
+        { name: "name", type: "text", required: true, max: 100 },
+        { name: "address", type: "text", max: 100 },
         { name: "note", type: "text", max: 2000 },
         { name: "created", type: "autodate", onCreate: true },
         { name: "updated", type: "autodate", onCreate: true, onUpdate: true },
       ],
       indexes: [
-        "CREATE UNIQUE INDEX `idx_accounts_address` ON `accounts` (`address`)",
+        "CREATE UNIQUE INDEX `idx_accounts_name` ON `accounts` (`name`)",
       ],
     });
     app.save(accounts);

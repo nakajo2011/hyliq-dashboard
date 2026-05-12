@@ -37,13 +37,19 @@ function readCsv(text: string): Record<string, string>[] {
   return parsed.data;
 }
 
+/** Normalize account name to a stable hash key (case-insensitive, trimmed). */
+function accountKey(accountName: string): string {
+  return accountName.trim().toLowerCase();
+}
+
 export async function parseTradeCsv(
   text: string,
-  address: string
+  accountName: string
 ): Promise<ParseResult<ParsedTrade>> {
   const rows = readCsv(text);
   const result: ParsedTrade[] = [];
   const errors: ParseResult<ParsedTrade>["errors"] = [];
+  const key = accountKey(accountName);
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
@@ -60,7 +66,7 @@ export async function parseTradeCsv(
       const closed_pnl = toNum(r.closedPnl);
       const hash = await sha256Hex([
         "trade",
-        address.toLowerCase(),
+        key,
         time,
         r.coin,
         dir,
@@ -87,16 +93,17 @@ export async function parseTradeCsv(
     }
   }
 
-  return { kind: "trade", rows: result, errors, detectedAddress: address };
+  return { kind: "trade", rows: result, errors };
 }
 
 export async function parseFundingCsv(
   text: string,
-  address: string
+  accountName: string
 ): Promise<ParseResult<ParsedFunding>> {
   const rows = readCsv(text);
   const result: ParsedFunding[] = [];
   const errors: ParseResult<ParsedFunding>["errors"] = [];
+  const key = accountKey(accountName);
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
@@ -110,7 +117,7 @@ export async function parseFundingCsv(
       const rate = toNum(r.rate);
       const hash = await sha256Hex([
         "funding",
-        address.toLowerCase(),
+        key,
         time,
         r.coin,
         side,
@@ -146,11 +153,12 @@ function parseAmountWithCurrency(raw: string): { amount: number; currency: strin
 
 export async function parseTransferCsv(
   text: string,
-  address: string
+  accountName: string
 ): Promise<ParseResult<ParsedTransfer>> {
   const rows = readCsv(text);
   const result: ParsedTransfer[] = [];
   const errors: ParseResult<ParsedTransfer>["errors"] = [];
+  const key = accountKey(accountName);
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
@@ -162,7 +170,7 @@ export async function parseTransferCsv(
       const { amount: fee } = parseAmountWithCurrency(r.fee ?? "0");
       const hash = await sha256Hex([
         "transfer",
-        address.toLowerCase(),
+        key,
         time,
         r.action,
         accountValueChange,
