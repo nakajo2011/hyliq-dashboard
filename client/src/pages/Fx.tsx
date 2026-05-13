@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   CartesianGrid,
   Line,
@@ -22,6 +23,23 @@ interface FxRow {
   date: string; // PocketBase date string (e.g. "2026-04-02 00:00:00.000Z")
   usd_jpy: number;
   source: string;
+}
+
+type RateSource = "mizuho" | "frankfurter";
+const SOURCE_STORAGE_KEY = "hyliq.fxSource";
+const SOURCE_LABEL: Record<RateSource, string> = {
+  mizuho: "みずほ TTM",
+  frankfurter: "Frankfurter (ECB)",
+};
+
+function loadSourceFromStorage(): RateSource | null {
+  try {
+    const v = localStorage.getItem(SOURCE_STORAGE_KEY);
+    if (v === "mizuho" || v === "frankfurter") return v;
+  } catch {
+    // localStorage unavailable
+  }
+  return null;
 }
 
 function dateOnly(s: string): string {
@@ -76,6 +94,27 @@ export function Fx() {
   const [filterFrom, setFilterFrom] = useState("");
   const [filterTo, setFilterTo] = useState("");
   const [deleting, setDeleting] = useState(false);
+
+  // ── ガード state (取引件数 + ソース選択) ────────────────────
+  const [tradeCount, setTradeCount] = useState<number | null>(null);
+  const [source, setSource] = useState<RateSource | null>(() =>
+    loadSourceFromStorage()
+  );
+  const [switching, setSwitching] = useState(false);
+
+  // 取引件数を mount 時に 1 回チェック (FX 機能の有効化判定用)
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await pb
+          .collection("trades")
+          .getList(1, 1, { fields: "id" });
+        setTradeCount(res.totalItems);
+      } catch {
+        setTradeCount(0);
+      }
+    })();
+  }, []);
 
   const reload = async () => {
     setLoading(true);
@@ -276,10 +315,23 @@ export function Fx() {
     await apiFetchAndStore(rangeFrom, rangeTo);
   };
 
-  // ── 全削除 ─────────────────────────────────────────────
+  // ── 全削除 (低レベル: UI 状態を触らず削除のみ) ────────────────
+  const deleteAllRates = async (): Promise<number> => {
+    const list = await pb
+      .collection("fx_rates")
+      .getFullList<{ id: string }>({ fields: "id" });
+    const CHUNK = 20;
+    for (let i = 0; i < list.length; i += CHUNK) {
+      const chunk = list.slice(i, i + CHUNK);
+      await Promise.all(
+        chunk.map((r) => pb.collection("fx_rates").delete(r.id))
+      );
+    }
+    return list.length;
+  };
+
   const handleDeleteAll = async () => {
     if (deleting) return;
-    // First confirmation
     const list = await pb
       .collection("fx_rates")
       .getFullList<{ id: string }>({ fields: "id" });
@@ -298,14 +350,7 @@ export function Fx() {
     }
     setDeleting(true);
     try {
-      // 20 並列ずつ削除 (5,500 件で約 30 秒)
-      const CHUNK = 20;
-      for (let i = 0; i < list.length; i += CHUNK) {
-        const chunk = list.slice(i, i + CHUNK);
-        await Promise.all(
-          chunk.map((r) => pb.collection("fx_rates").delete(r.id))
-        );
-      }
+      await deleteAllRates();
       await reload();
     } catch (e) {
       alert(
@@ -315,6 +360,63 @@ export function Fx() {
     } finally {
       setDeleting(false);
     }
+  };
+
+  // ── ソース選択 / 切替 ──────────────────────────────────
+  const persistSource = (s: RateSource | null) => {
+    try {
+      if (s) localStorage.setItem(SOURCE_STORAGE_KEY, s);
+      else localStorage.removeItem(SOURCE_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    setSource(s);
+    // 各セクションの作業中 state もリセット (古いプレビュー残らないように)
+    setMizuhoFile(null);
+    setMizuhoParsed(null);
+    setMizuhoFilter(null);
+    setMizuhoStatus({ status: "idle" });
+    setApiStatus({ status: "idle" });
+    setRangeFrom("");
+    setRangeTo("");
+  };
+
+  const handleSelectSource = async (newSource: RateSource) => {
+    // 既存レートがあれば確認 → 削除
+    const existing = await pb
+      .collection("fx_rates")
+      .getFullList<{ id: string }>({ fields: "id" });
+    if (existing.length > 0) {
+      if (
+        !window.confirm(
+          `現在 ${existing.length.toLocaleString()} 件のレートが登録されています。\n` +
+            `「${SOURCE_LABEL[newSource]}」を選択すると、既存のレートはすべて削除されます。\n\n` +
+            "続行しますか？"
+        )
+      ) {
+        return;
+      }
+      setSwitching(true);
+      try {
+        await deleteAllRates();
+        await reload();
+      } catch (e) {
+        alert(
+          "削除中にエラー: " + (e instanceof Error ? e.message : String(e))
+        );
+        setSwitching(false);
+        return;
+      }
+      setSwitching(false);
+    }
+    persistSource(newSource);
+  };
+
+  const handleSwitchSource = async () => {
+    if (!source) return;
+    const newSource: RateSource =
+      source === "mizuho" ? "frankfurter" : "mizuho";
+    await handleSelectSource(newSource);
   };
 
   // ── 折れ線グラフ用データ ─────────────────────────────────
@@ -339,10 +441,157 @@ export function Fx() {
     };
   }, [rows]);
 
+  // ── ガード: 取引無し / ソース未選択 ─────────────────────
+  if (tradeCount === null) {
+    return <p>読み込み中...</p>;
+  }
+
+  if (tradeCount === 0) {
+    return (
+      <div>
+        <h1 style={{ marginTop: 0 }}>FX レート (USD/JPY)</h1>
+        <div
+          style={{
+            ...section,
+            background: "#3b2f1d",
+            border: "1px solid #6b522a",
+            color: "#f5d678",
+          }}
+        >
+          <strong>⚠ 取引データがまだありません</strong>
+          <p style={{ marginTop: 8, marginBottom: 0, color: "#e6c97a" }}>
+            FX レート機能は確定申告レポート用の JPY 換算に使うため、
+            先に取引データを登録してください。
+          </p>
+          <p style={{ marginTop: 12, marginBottom: 0 }}>
+            <Link
+              to="/upload"
+              style={{
+                display: "inline-block",
+                background: "#2563eb",
+                color: "#fff",
+                padding: "0.45rem 0.9rem",
+                borderRadius: 6,
+                textDecoration: "none",
+                fontSize: "0.9rem",
+              }}
+            >
+              Upload ページへ
+            </Link>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (source === null) {
+    return (
+      <div>
+        <h1 style={{ marginTop: 0 }}>FX レート (USD/JPY)</h1>
+        <p style={{ color: "#888" }}>
+          確定申告で使う USD/JPY のレートソースを選んでください。
+          いつでも切り替え可能ですが、切り替え時は登録済みレートがすべて削除されます。
+        </p>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: "1rem",
+            marginTop: "1.2rem",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => handleSelectSource("mizuho")}
+            disabled={switching}
+            style={{
+              padding: "1.2rem",
+              background: "#15281c",
+              border: "1px solid #2d5a3d",
+              borderRadius: 8,
+              color: "#e6e6e6",
+              cursor: switching ? "not-allowed" : "pointer",
+              textAlign: "left",
+              fontFamily: "inherit",
+            }}
+          >
+            <div
+              style={{ fontWeight: 600, color: "#5dd58c", marginBottom: 6 }}
+            >
+              みずほ TTM (確定申告で推奨)
+            </div>
+            <div style={{ fontSize: "0.85rem", color: "#aab" }}>
+              三菱UFJ銀行 公示仲値と同等の標準レート。みずほ銀行が公開する
+              quote.csv を手動ダウンロード → アップロードで取り込み。
+              国税庁が認める銀行公示レート。
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSelectSource("frankfurter")}
+            disabled={switching}
+            style={{
+              padding: "1.2rem",
+              background: "#141823",
+              border: "1px solid #2a3047",
+              borderRadius: 8,
+              color: "#e6e6e6",
+              cursor: switching ? "not-allowed" : "pointer",
+              textAlign: "left",
+              fontFamily: "inherit",
+            }}
+          >
+            <div style={{ fontWeight: 600, color: "#6cf", marginBottom: 6 }}>
+              Frankfurter (ECB)
+            </div>
+            <div style={{ fontSize: "0.85rem", color: "#aab" }}>
+              ECB が公開する日次レートを API で自動取得。無料・API キー不要。
+              TTM とは 0.1〜0.5 円差。手早く済ませたい場合に。
+            </div>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
-      <h1 style={{ marginTop: 0 }}>FX レート (USD/JPY)</h1>
-      <p style={{ color: "#888" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: "1rem",
+        }}
+      >
+        <h1 style={{ marginTop: 0 }}>FX レート (USD/JPY)</h1>
+        <div style={{ fontSize: "0.88rem", color: "#aab" }}>
+          ソース: <strong style={{ color: "#e6e6e6" }}>{SOURCE_LABEL[source]}</strong>
+          <button
+            type="button"
+            onClick={handleSwitchSource}
+            disabled={switching}
+            style={{
+              marginLeft: 10,
+              background: "transparent",
+              color: "#6cf",
+              border: "1px solid #2a3047",
+              borderRadius: 6,
+              padding: "0.25rem 0.6rem",
+              cursor: switching ? "not-allowed" : "pointer",
+              fontSize: "0.85rem",
+            }}
+            title={`${SOURCE_LABEL[source === "mizuho" ? "frankfurter" : "mizuho"]} に切替 (現在のレートは全削除)`}
+          >
+            {switching
+              ? "切替中..."
+              : `${SOURCE_LABEL[source === "mizuho" ? "frankfurter" : "mizuho"]} に切替`}
+          </button>
+        </div>
+      </div>
+      <p style={{ color: "#888", marginTop: 0 }}>
         確定申告レポートの JPY 換算に使う為替レートを登録します。
         該当日が無い場合は直近過去のレートが自動的に使われます (carry-forward)。
       </p>
@@ -387,11 +636,12 @@ export function Fx() {
           既存レートを上書きしない
         </label>
         <span style={{ fontSize: "0.8rem", color: "#666" }}>
-          (みずほ / Frankfurter 両方の取り込みに適用)
+          (取り込みに共通で適用)
         </span>
       </div>
 
-      {/* みずほ CSV 取り込み (推奨) */}
+      {/* みずほ CSV 取り込み (source = mizuho のときのみ) */}
+      {source === "mizuho" && (
       <section
         style={{
           ...section,
@@ -572,15 +822,18 @@ export function Fx() {
           </p>
         )}
       </section>
+      )}
 
-      {/* Frankfurter (ECB) */}
+      {/* Frankfurter (ECB) (source = frankfurter のときのみ) */}
+      {source === "frankfurter" && (
       <section style={section}>
         <h2 style={h2}>API から取得 (Frankfurter / ECB)</h2>
         <p style={{ color: "#888", fontSize: "0.85rem", marginTop: 0 }}>
           Frankfurter API (ECB の日次レート、無料・API キー不要) から
           USD/JPY を一括取得します。週末・祝日は欠落しますが、
           carry-forward で吸収されます。MUFG TTM とは数値が微妙に異なる
-          (通常 0.1〜0.5 円差) ため、確定申告本番には みずほ CSV を推奨します。
+          (通常 0.1〜0.5 円差) ため、より厳密にしたい場合はソースを みずほ TTM に
+          切替えてください。
         </p>
 
         <div
@@ -659,6 +912,7 @@ export function Fx() {
           </p>
         )}
       </section>
+      )}
 
       {/* 登録済みレートの折れ線グラフ */}
       <section style={section}>
