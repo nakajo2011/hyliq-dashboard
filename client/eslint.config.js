@@ -18,5 +18,14 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // Fetch-on-mount and fetch-on-deps-change patterns inherently call
+      // setState inside useEffect (loading flag, data, error). The
+      // alternative ("don't sync external state via effects") doesn't fit
+      // this app, which has PocketBase as the source of truth. We accept
+      // the cascading-render warning as the price of straightforward
+      // data fetching.
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])

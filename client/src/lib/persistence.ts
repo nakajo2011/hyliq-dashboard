@@ -44,7 +44,7 @@ async function ensureAccount(accountName: string): Promise<{ id: string }> {
       .collection("accounts")
       .getFirstListItem(`name = "${normalized}"`, NO_CANCEL);
     return { id: existing.id };
-  } catch (e) {
+  } catch {
     // Not found → create
     const created = await pb
       .collection("accounts")

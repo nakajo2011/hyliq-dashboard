@@ -44,7 +44,7 @@ export function parseBulkFxInput(input: string): {
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i].trim();
     if (!raw) continue;
-    const m = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})[\s,	]+(-?\d+(?:\.\d+)?)/);
+    const m = raw.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})[\s,]+(-?\d+(?:\.\d+)?)/);
     if (!m) {
       errors.push({ line: i + 1, raw, message: "形式を認識できません" });
       continue;
