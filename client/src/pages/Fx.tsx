@@ -1,117 +1,51 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { pb } from "../lib/pb";
+import type { FxRecord } from "../lib/db-types";
+import { COLORS, section } from "../styles";
+import { SourceSelector } from "../components/fx/SourceSelector";
 import {
-  fetchFrankfurterRange,
-  parseMizuhoCsv,
-  upsertFxRate,
-  type MizuhoParseResult,
-} from "../lib/fx";
-import { dateKeyJst } from "../lib/pnl";
-import { dateOnly } from "../lib/format";
-import {
-  btnDanger,
-  btnDangerDisabled,
-  btnDisabled,
-  btnGhost,
-  btnPrimary,
-  h2,
-  input,
-  lbl,
-  section,
-} from "../styles";
+  loadSourceFromStorage,
+  persistSource,
+  SOURCE_LABEL,
+  type RateSource,
+} from "../components/fx/source";
+import { MizuhoSection } from "../components/fx/MizuhoSection";
+import { FrankfurterSection } from "../components/fx/FrankfurterSection";
+import { RateChart } from "../components/fx/RateChart";
 
-interface FxRow {
-  id: string;
-  date: string; // PocketBase date string (e.g. "2026-04-02 00:00:00.000Z")
-  usd_jpy: number;
-  source: string;
-}
-
-type RateSource = "mizuho" | "frankfurter";
-const SOURCE_STORAGE_KEY = "hyliq.fxSource";
-const SOURCE_LABEL: Record<RateSource, string> = {
-  mizuho: "みずほ TTM",
-  frankfurter: "Frankfurter (ECB)",
-};
-
-function loadSourceFromStorage(): RateSource | null {
-  try {
-    const v = localStorage.getItem(SOURCE_STORAGE_KEY);
-    if (v === "mizuho" || v === "frankfurter") return v;
-  } catch {
-    // localStorage unavailable
-  }
-  return null;
-}
-
-
+/**
+ * Page-level orchestrator.
+ *
+ * Responsibilities that don't fit any one sub-component:
+ *   - guard: require at least 1 trade before showing anything
+ *   - guard: require a `source` selection (Mizuho vs Frankfurter)
+ *   - own the "common settings" (skipExisting)
+ *   - own the rates loaded for the chart + the filter that drives it
+ *   - hand sub-components a `reload` callback to refresh after writes
+ *   - handle source switch (with full-data-wipe confirmation)
+ *   - handle "delete all" button on the chart
+ */
 export function Fx() {
-  const [rows, setRows] = useState<FxRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // ── 共通設定 ──────────────────────────────────────────────
-  const [skipExisting, setSkipExisting] = useState(true);
-
-  // ── みずほ CSV 取り込み state ────────────────────────────────
-  const [mizuhoFile, setMizuhoFile] = useState<File | null>(null);
-  const [mizuhoParsed, setMizuhoParsed] = useState<MizuhoParseResult | null>(
-    null
-  );
-  /** Counts before / after the "trade-date filter" applied to a parsed file. */
-  const [mizuhoFilter, setMizuhoFilter] = useState<{
-    totalParsed: number;
-    droppedBeforeTrades: number;
-    earliestTradeDate: string | null;
-  } | null>(null);
-  const [mizuhoStatus, setMizuhoStatus] = useState<
-    | { status: "idle" }
-    | { status: "running" }
-    | { status: "done"; saved: number; skipped: number }
-    | { status: "error"; message: string }
-  >({ status: "idle" });
-  const [mizuhoDrag, setMizuhoDrag] = useState(false);
-  const mizuhoInputRef = useRef<HTMLInputElement>(null);
-
-  // ── Frankfurter (ECB) state ────────────────────────────────
-  const [rangeFrom, setRangeFrom] = useState("");
-  const [rangeTo, setRangeTo] = useState("");
-  const [apiStatus, setApiStatus] = useState<
-    | { status: "idle" }
-    | { status: "running" }
-    | {
-        status: "done";
-        range: string;
-        fetched: number;
-        saved: number;
-        skipped: number;
-      }
-    | { status: "error"; message: string }
-  >({ status: "idle" });
-
-  // ── 折れ線グラフ用フィルタ ─────────────────────────────────
-  const [filterFrom, setFilterFrom] = useState("");
-  const [filterTo, setFilterTo] = useState("");
-  const [deleting, setDeleting] = useState(false);
-
-  // ── ガード state (取引件数 + ソース選択) ────────────────────
+  // ── ガード state ──────────────────────────────────────
   const [tradeCount, setTradeCount] = useState<number | null>(null);
   const [source, setSource] = useState<RateSource | null>(() =>
     loadSourceFromStorage()
   );
   const [switching, setSwitching] = useState(false);
 
-  // 取引件数を mount 時に 1 回チェック (FX 機能の有効化判定用)
+  // ── 共通設定 ──────────────────────────────────────────
+  const [skipExisting, setSkipExisting] = useState(true);
+
+  // ── 折れ線グラフ用 state ────────────────────────────────
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+  const [rows, setRows] = useState<FxRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // 取引件数チェック (mount 1 回)
   useEffect(() => {
     (async () => {
       try {
@@ -130,7 +64,8 @@ export function Fx() {
     setError(null);
     try {
       const filterParts: string[] = [];
-      if (filterFrom) filterParts.push(`date >= "${filterFrom} 00:00:00.000Z"`);
+      if (filterFrom)
+        filterParts.push(`date >= "${filterFrom} 00:00:00.000Z"`);
       if (filterTo) {
         const d = new Date(filterTo + "T00:00:00Z");
         d.setUTCDate(d.getUTCDate() + 1);
@@ -138,10 +73,12 @@ export function Fx() {
         filterParts.push(`date < "${endExclusive} 00:00:00.000Z"`);
       }
       const filter = filterParts.join(" && ");
-
       const list = await pb
         .collection("fx_rates")
-        .getFullList<FxRow>({ sort: "+date", filter: filter || undefined });
+        .getFullList<FxRecord>({
+          sort: "+date",
+          filter: filter || undefined,
+        });
       setRows(list);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -155,177 +92,8 @@ export function Fx() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterFrom, filterTo]);
 
-  // ── みずほ CSV ハンドラ ──────────────────────────────────
-  const handleMizuhoFile = async (file: File) => {
-    setMizuhoFile(file);
-    setMizuhoParsed(null);
-    setMizuhoFilter(null);
-    setMizuhoStatus({ status: "idle" });
-    try {
-      // Look up the earliest trade date (JST) so we can skip pre-trade rates
-      // and not bloat the DB with decades of unused history.
-      let earliest: string | null = null;
-      try {
-        const first = await pb
-          .collection("trades")
-          .getList<{ time: string }>(1, 1, {
-            sort: "+time",
-            fields: "time",
-          });
-        if (first.items.length > 0) {
-          earliest = dateKeyJst(first.items[0].time);
-        }
-      } catch {
-        // ignore — if we can't look up trades, fall back to importing all
-      }
-
-      const buf = await file.arrayBuffer();
-      const parsed = parseMizuhoCsv(buf);
-
-      let rates = parsed.rates;
-      let dropped = 0;
-      if (earliest) {
-        const before = rates.length;
-        rates = rates.filter((r) => r.date >= earliest);
-        dropped = before - rates.length;
-      }
-
-      setMizuhoParsed({
-        rates,
-        errors: parsed.errors,
-        range:
-          rates.length > 0
-            ? { start: rates[0].date, end: rates[rates.length - 1].date }
-            : undefined,
-      });
-      setMizuhoFilter({
-        totalParsed: parsed.rates.length,
-        droppedBeforeTrades: dropped,
-        earliestTradeDate: earliest,
-      });
-
-      if (rates.length === 0 && parsed.errors.length > 0) {
-        setMizuhoStatus({ status: "error", message: parsed.errors[0] });
-      }
-    } catch (e) {
-      setMizuhoStatus({
-        status: "error",
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  };
-
-  const handleMizuhoSave = async () => {
-    if (!mizuhoParsed || mizuhoParsed.rates.length === 0) return;
-    setMizuhoStatus({ status: "running" });
-
-    let existing = new Set<string>();
-    if (skipExisting) {
-      try {
-        const list = await pb
-          .collection("fx_rates")
-          .getFullList<{ date: string }>({ fields: "date" });
-        existing = new Set(list.map((r) => dateOnly(r.date)));
-      } catch {
-        // proceed without skip set
-      }
-    }
-
-    let saved = 0;
-    let skipped = 0;
-    try {
-      for (const r of mizuhoParsed.rates) {
-        if (existing.has(r.date)) {
-          skipped++;
-        } else {
-          await upsertFxRate(r.date, r.usd_jpy);
-          saved++;
-        }
-      }
-      setMizuhoStatus({ status: "done", saved, skipped });
-      setMizuhoFile(null);
-      setMizuhoParsed(null);
-      setMizuhoFilter(null);
-      await reload();
-    } catch (e) {
-      setMizuhoStatus({
-        status: "error",
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  };
-
-  // ── Frankfurter ハンドラ ──────────────────────────────────
-  const apiFetchAndStore = async (from: string, to: string) => {
-    setApiStatus({ status: "running" });
-    try {
-      const result = await fetchFrankfurterRange(from, to);
-
-      let existing = new Set<string>();
-      if (skipExisting) {
-        const list = await pb
-          .collection("fx_rates")
-          .getFullList<{ date: string }>({ fields: "date" });
-        existing = new Set(list.map((r) => dateOnly(r.date)));
-      }
-
-      let saved = 0;
-      let skipped = 0;
-      for (const r of result.rates) {
-        if (existing.has(r.date)) {
-          skipped++;
-        } else {
-          await upsertFxRate(r.date, r.usd_jpy);
-          saved++;
-        }
-      }
-
-      setApiStatus({
-        status: "done",
-        range: `${result.startDate} 〜 ${result.endDate}`,
-        fetched: result.rates.length,
-        saved,
-        skipped,
-      });
-      await reload();
-    } catch (e) {
-      setApiStatus({
-        status: "error",
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  };
-
-  const handleFetchTradeRange = async () => {
-    try {
-      const trades = await pb
-        .collection("trades")
-        .getFullList<{ time: string }>({ fields: "time", sort: "+time" });
-      if (trades.length === 0) {
-        alert("取引データがありません。Upload からインポートしてください。");
-        return;
-      }
-      const earliest = dateKeyJst(trades[0].time);
-      const latest = dateKeyJst(trades[trades.length - 1].time);
-      await apiFetchAndStore(earliest, latest);
-    } catch (e) {
-      setApiStatus({
-        status: "error",
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  };
-
-  const handleFetchManualRange = async () => {
-    if (!rangeFrom || !rangeTo) {
-      alert("期間を指定してください");
-      return;
-    }
-    await apiFetchAndStore(rangeFrom, rangeTo);
-  };
-
-  // ── 全削除 (低レベル: UI 状態を触らず削除のみ) ────────────────
-  const deleteAllRates = async (): Promise<number> => {
+  /** Low-level: deletes every fx_rate row (no confirmation). */
+  const deleteAllRates = async () => {
     const list = await pb
       .collection("fx_rates")
       .getFullList<{ id: string }>({ fields: "id" });
@@ -344,14 +112,13 @@ export function Fx() {
     const list = await pb
       .collection("fx_rates")
       .getFullList<{ id: string }>({ fields: "id" });
-    const count = list.length;
-    if (count === 0) {
+    if (list.length === 0) {
       alert("削除するレートがありません");
       return;
     }
     if (
       !window.confirm(
-        `本当に全 ${count.toLocaleString()} 件の FX レートを削除しますか？\n` +
+        `本当に全 ${list.length.toLocaleString()} 件の FX レートを削除しますか？\n` +
           "元に戻せません (確定申告レポートが全件「未登録」になります)。"
       )
     ) {
@@ -363,35 +130,20 @@ export function Fx() {
       await reload();
     } catch (e) {
       alert(
-        "削除中にエラーが発生しました: " +
-          (e instanceof Error ? e.message : String(e))
+        "削除中にエラー: " + (e instanceof Error ? e.message : String(e))
       );
     } finally {
       setDeleting(false);
     }
   };
 
-  // ── ソース選択 / 切替 ──────────────────────────────────
-  const persistSource = (s: RateSource | null) => {
-    try {
-      if (s) localStorage.setItem(SOURCE_STORAGE_KEY, s);
-      else localStorage.removeItem(SOURCE_STORAGE_KEY);
-    } catch {
-      // ignore
-    }
+  // ── ソース選択 / 切替 ────────────────────────────────
+  const changeSource = (s: RateSource | null) => {
+    persistSource(s);
     setSource(s);
-    // 各セクションの作業中 state もリセット (古いプレビュー残らないように)
-    setMizuhoFile(null);
-    setMizuhoParsed(null);
-    setMizuhoFilter(null);
-    setMizuhoStatus({ status: "idle" });
-    setApiStatus({ status: "idle" });
-    setRangeFrom("");
-    setRangeTo("");
   };
 
   const handleSelectSource = async (newSource: RateSource) => {
-    // 既存レートがあれば確認 → 削除
     const existing = await pb
       .collection("fx_rates")
       .getFullList<{ id: string }>({ fields: "id" });
@@ -418,7 +170,7 @@ export function Fx() {
       }
       setSwitching(false);
     }
-    persistSource(newSource);
+    changeSource(newSource);
   };
 
   const handleSwitchSource = async () => {
@@ -428,32 +180,8 @@ export function Fx() {
     await handleSelectSource(newSource);
   };
 
-  // ── 折れ線グラフ用データ ─────────────────────────────────
-  const chartData = useMemo(
-    () =>
-      rows.map((r) => ({
-        date: dateOnly(r.date),
-        usd_jpy: r.usd_jpy,
-      })),
-    [rows]
-  );
-
-  const stats = useMemo(() => {
-    if (rows.length === 0) return null;
-    const values = rows.map((r) => r.usd_jpy);
-    return {
-      count: rows.length,
-      min: Math.min(...values),
-      max: Math.max(...values),
-      first: rows[0],
-      last: rows[rows.length - 1],
-    };
-  }, [rows]);
-
-  // ── ガード: 取引無し / ソース未選択 ─────────────────────
-  if (tradeCount === null) {
-    return <p>読み込み中...</p>;
-  }
+  // ── ガード分岐 ───────────────────────────────────────
+  if (tradeCount === null) return <p>読み込み中...</p>;
 
   if (tradeCount === 0) {
     return (
@@ -464,7 +192,7 @@ export function Fx() {
             ...section,
             background: "#3b2f1d",
             border: "1px solid #6b522a",
-            color: "#f5d678",
+            color: COLORS.warn,
           }}
         >
           <strong>⚠ 取引データがまだありません</strong>
@@ -477,7 +205,7 @@ export function Fx() {
               to="/upload"
               style={{
                 display: "inline-block",
-                background: "#2563eb",
+                background: COLORS.primary,
                 color: "#fff",
                 padding: "0.45rem 0.9rem",
                 borderRadius: 6,
@@ -494,76 +222,10 @@ export function Fx() {
   }
 
   if (source === null) {
-    return (
-      <div>
-        <h1 style={{ marginTop: 0 }}>FX レート (USD/JPY)</h1>
-        <p style={{ color: "#888" }}>
-          確定申告で使う USD/JPY のレートソースを選んでください。
-          いつでも切り替え可能ですが、切り替え時は登録済みレートがすべて削除されます。
-        </p>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-            gap: "1rem",
-            marginTop: "1.2rem",
-          }}
-        >
-          <button
-            type="button"
-            onClick={() => handleSelectSource("mizuho")}
-            disabled={switching}
-            style={{
-              padding: "1.2rem",
-              background: "#15281c",
-              border: "1px solid #2d5a3d",
-              borderRadius: 8,
-              color: "#e6e6e6",
-              cursor: switching ? "not-allowed" : "pointer",
-              textAlign: "left",
-              fontFamily: "inherit",
-            }}
-          >
-            <div
-              style={{ fontWeight: 600, color: "#5dd58c", marginBottom: 6 }}
-            >
-              みずほ TTM (確定申告で推奨)
-            </div>
-            <div style={{ fontSize: "0.85rem", color: "#aab" }}>
-              三菱UFJ銀行 公示仲値と同等の標準レート。みずほ銀行が公開する
-              quote.csv を手動ダウンロード → アップロードで取り込み。
-              国税庁が認める銀行公示レート。
-            </div>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSelectSource("frankfurter")}
-            disabled={switching}
-            style={{
-              padding: "1.2rem",
-              background: "#141823",
-              border: "1px solid #2a3047",
-              borderRadius: 8,
-              color: "#e6e6e6",
-              cursor: switching ? "not-allowed" : "pointer",
-              textAlign: "left",
-              fontFamily: "inherit",
-            }}
-          >
-            <div style={{ fontWeight: 600, color: "#6cf", marginBottom: 6 }}>
-              Frankfurter (ECB)
-            </div>
-            <div style={{ fontSize: "0.85rem", color: "#aab" }}>
-              ECB が公開する日次レートを API で自動取得。無料・API キー不要。
-              TTM とは 0.1〜0.5 円差。手早く済ませたい場合に。
-            </div>
-          </button>
-        </div>
-      </div>
-    );
+    return <SourceSelector onSelect={handleSelectSource} disabled={switching} />;
   }
 
+  // ── 通常表示 ─────────────────────────────────────────
   return (
     <div>
       <div
@@ -576,8 +238,9 @@ export function Fx() {
         }}
       >
         <h1 style={{ marginTop: 0 }}>FX レート (USD/JPY)</h1>
-        <div style={{ fontSize: "0.88rem", color: "#aab" }}>
-          ソース: <strong style={{ color: "#e6e6e6" }}>{SOURCE_LABEL[source]}</strong>
+        <div style={{ fontSize: "0.88rem", color: COLORS.muted }}>
+          ソース:{" "}
+          <strong style={{ color: COLORS.text }}>{SOURCE_LABEL[source]}</strong>
           <button
             type="button"
             onClick={handleSwitchSource}
@@ -585,27 +248,31 @@ export function Fx() {
             style={{
               marginLeft: 10,
               background: "transparent",
-              color: "#6cf",
-              border: "1px solid #2a3047",
+              color: COLORS.link,
+              border: `1px solid ${COLORS.border}`,
               borderRadius: 6,
               padding: "0.25rem 0.6rem",
               cursor: switching ? "not-allowed" : "pointer",
               fontSize: "0.85rem",
             }}
-            title={`${SOURCE_LABEL[source === "mizuho" ? "frankfurter" : "mizuho"]} に切替 (現在のレートは全削除)`}
+            title={`${
+              SOURCE_LABEL[source === "mizuho" ? "frankfurter" : "mizuho"]
+            } に切替 (現在のレートは全削除)`}
           >
             {switching
               ? "切替中..."
-              : `${SOURCE_LABEL[source === "mizuho" ? "frankfurter" : "mizuho"]} に切替`}
+              : `${
+                  SOURCE_LABEL[source === "mizuho" ? "frankfurter" : "mizuho"]
+                } に切替`}
           </button>
         </div>
       </div>
-      <p style={{ color: "#888", marginTop: 0 }}>
+      <p style={{ color: COLORS.subtle, marginTop: 0 }}>
         確定申告レポートの JPY 換算に使う為替レートを登録します。
         該当日が無い場合は直近過去のレートが自動的に使われます (carry-forward)。
       </p>
 
-      {/* 共通設定 (各取り込みに共通で効く) */}
+      {/* 共通設定バナー */}
       <div
         style={{
           display: "flex",
@@ -613,8 +280,8 @@ export function Fx() {
           gap: 10,
           marginTop: "1rem",
           padding: "0.7rem 1rem",
-          background: "#1c2030",
-          border: "1px solid #2a3047",
+          background: COLORS.panelAlt,
+          border: `1px solid ${COLORS.border}`,
           borderRadius: 8,
           flexWrap: "wrap",
         }}
@@ -622,7 +289,7 @@ export function Fx() {
         <span
           style={{
             fontSize: "0.75rem",
-            color: "#888",
+            color: COLORS.subtle,
             textTransform: "uppercase",
             letterSpacing: 0.5,
           }}
@@ -644,438 +311,29 @@ export function Fx() {
           />
           既存レートを上書きしない
         </label>
-        <span style={{ fontSize: "0.8rem", color: "#666" }}>
+        <span style={{ fontSize: "0.8rem", color: COLORS.faint }}>
           (取り込みに共通で適用)
         </span>
       </div>
 
-      {/* みずほ CSV 取り込み (source = mizuho のときのみ) */}
       {source === "mizuho" && (
-      <section
-        style={{
-          ...section,
-          border: "1px solid #2d5a3d",
-          background: "#15281c",
-        }}
-      >
-        <h2 style={h2}>
-          みずほ CSV から TTM を取り込む{" "}
-          <span style={{ color: "#5dd58c", fontSize: "0.8rem" }}>
-            (確定申告で推奨)
-          </span>
-        </h2>
-        <p style={{ color: "#aab", fontSize: "0.85rem", marginTop: 0 }}>
-          みずほ銀行が公開している <code>quote.csv</code> には 2002 年以降の
-          日次 TTM (公示仲値) が 1 ファイルにまとまっています。国税庁が認める
-          銀行公示レートで、確定申告で最も使われる標準値です。
-          ブラウザでダウンロードしてから下にアップロードしてください
-          (スクレイプは行いません)。
-        </p>
-
-        <ol
-          style={{ paddingLeft: "1.2rem", margin: "0.8rem 0", lineHeight: 1.7 }}
-        >
-          <li>
-            <a
-              href="https://www.mizuhobank.co.jp/market/quote.csv"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                display: "inline-block",
-                marginTop: 4,
-                background: "#2563eb",
-                color: "#fff",
-                padding: "0.4rem 0.9rem",
-                borderRadius: 6,
-                textDecoration: "none",
-                fontSize: "0.9rem",
-              }}
-            >
-              📥 quote.csv をダウンロード (新タブ)
-            </a>{" "}
-            <span style={{ color: "#888", fontSize: "0.8rem" }}>
-              約 1.1MB、Shift_JIS、全期間 (2002〜現在)
-            </span>
-          </li>
-          <li>
-            ダウンロードしたファイルを下の枠にドラッグ&ドロップ、
-            またはクリックして選択:
-            <div
-              onDragEnter={(ev) => {
-                ev.preventDefault();
-                setMizuhoDrag(true);
-              }}
-              onDragOver={(ev) => {
-                ev.preventDefault();
-                setMizuhoDrag(true);
-              }}
-              onDragLeave={() => setMizuhoDrag(false)}
-              onDrop={(ev) => {
-                ev.preventDefault();
-                setMizuhoDrag(false);
-                const file = ev.dataTransfer.files[0];
-                if (file) handleMizuhoFile(file);
-              }}
-              onClick={() => mizuhoInputRef.current?.click()}
-              style={{
-                marginTop: 8,
-                border: `2px dashed ${mizuhoDrag ? "#6cf" : "#3a5a4d"}`,
-                background: mizuhoDrag ? "#1a2030" : "#0f1a14",
-                borderRadius: 8,
-                padding: "1.2rem",
-                textAlign: "center",
-                cursor: "pointer",
-              }}
-            >
-              <input
-                ref={mizuhoInputRef}
-                type="file"
-                accept=".csv"
-                style={{ display: "none" }}
-                onChange={(ev) => {
-                  const file = ev.target.files?.[0];
-                  if (file) handleMizuhoFile(file);
-                  ev.target.value = "";
-                }}
-              />
-              {mizuhoFile ? (
-                <div>
-                  <strong>{mizuhoFile.name}</strong>{" "}
-                  <span style={{ color: "#888" }}>
-                    ({(mizuhoFile.size / 1024).toFixed(0)} KB)
-                  </span>
-                </div>
-              ) : (
-                <span style={{ color: "#aab" }}>
-                  ここに quote.csv をドロップ
-                </span>
-              )}
-            </div>
-          </li>
-          {mizuhoParsed && mizuhoParsed.rates.length > 0 && (
-            <li>
-              <strong>{mizuhoParsed.rates.length.toLocaleString()} 件</strong>{" "}
-              のレートを保存対象に抽出
-              {mizuhoParsed.range && (
-                <>
-                  {" "}
-                  ({mizuhoParsed.range.start} 〜 {mizuhoParsed.range.end})
-                </>
-              )}
-              {mizuhoFilter &&
-                mizuhoFilter.droppedBeforeTrades > 0 &&
-                mizuhoFilter.earliestTradeDate && (
-                  <div
-                    style={{
-                      fontSize: "0.82rem",
-                      color: "#aab",
-                      marginTop: 2,
-                    }}
-                  >
-                    元データ {mizuhoFilter.totalParsed.toLocaleString()} 件 →
-                    取引最古日 ({mizuhoFilter.earliestTradeDate}) 以降のみ採用、
-                    {mizuhoFilter.droppedBeforeTrades.toLocaleString()} 件を
-                    除外してストレージを節約
-                  </div>
-                )}
-              {mizuhoFilter && !mizuhoFilter.earliestTradeDate && (
-                <div
-                  style={{
-                    fontSize: "0.82rem",
-                    color: "#f5d678",
-                    marginTop: 2,
-                  }}
-                >
-                  ⚠ 取引データがまだ無いため全期間をインポートします。
-                  Upload 後に再取り込みすると不要分が除外されます。
-                </div>
-              )}
-              {mizuhoParsed.errors.length > 0 && (
-                <span style={{ color: "#f5d678", marginLeft: 6 }}>
-                  (警告 {mizuhoParsed.errors.length} 件)
-                </span>
-              )}
-              <div style={{ marginTop: 6 }}>
-                <button
-                  type="button"
-                  onClick={handleMizuhoSave}
-                  disabled={mizuhoStatus.status === "running"}
-                  style={
-                    mizuhoStatus.status === "running" ? btnDisabled : btnPrimary
-                  }
-                >
-                  {mizuhoStatus.status === "running" ? "保存中..." : "保存"}
-                </button>
-                <span
-                  style={{
-                    marginLeft: 12,
-                    fontSize: "0.85rem",
-                    color: "#aab",
-                  }}
-                >
-                  ↑ ページ上部の「共通設定」が適用されます
-                </span>
-              </div>
-            </li>
-          )}
-        </ol>
-
-        {mizuhoStatus.status === "done" && (
-          <p style={{ color: "#5dd58c", marginTop: 8, fontSize: "0.9rem" }}>
-            ✅ 新規 {mizuhoStatus.saved} 件、スキップ {mizuhoStatus.skipped} 件
-          </p>
-        )}
-        {mizuhoStatus.status === "error" && (
-          <p style={{ color: "#ff6b6b", marginTop: 8, fontSize: "0.9rem" }}>
-            ❌ {mizuhoStatus.message}
-          </p>
-        )}
-      </section>
+        <MizuhoSection skipExisting={skipExisting} onComplete={reload} />
       )}
-
-      {/* Frankfurter (ECB) (source = frankfurter のときのみ) */}
       {source === "frankfurter" && (
-      <section style={section}>
-        <h2 style={h2}>API から取得 (Frankfurter / ECB)</h2>
-        <p style={{ color: "#888", fontSize: "0.85rem", marginTop: 0 }}>
-          Frankfurter API (ECB の日次レート、無料・API キー不要) から
-          USD/JPY を一括取得します。週末・祝日は欠落しますが、
-          carry-forward で吸収されます。MUFG TTM とは数値が微妙に異なる
-          (通常 0.1〜0.5 円差) ため、より厳密にしたい場合はソースを みずほ TTM に
-          切替えてください。
-        </p>
-
-        <div
-          style={{
-            display: "flex",
-            gap: 12,
-            alignItems: "center",
-            flexWrap: "wrap",
-            marginBottom: "0.8rem",
-          }}
-        >
-          <button
-            type="button"
-            onClick={handleFetchTradeRange}
-            disabled={apiStatus.status === "running"}
-            style={apiStatus.status === "running" ? btnDisabled : btnPrimary}
-          >
-            {apiStatus.status === "running" ? "取得中..." : "取引日の全範囲を取得"}
-          </button>
-          <span style={{ color: "#666", fontSize: "0.85rem" }}>
-            ← 取引データの最古日〜最新日まで一括取得
-          </span>
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            alignItems: "flex-end",
-            flexWrap: "wrap",
-          }}
-        >
-          <div>
-            <label style={lbl}>From</label>
-            <input
-              type="date"
-              value={rangeFrom}
-              onChange={(e) => setRangeFrom(e.target.value)}
-              style={input}
-            />
-          </div>
-          <div>
-            <label style={lbl}>To</label>
-            <input
-              type="date"
-              value={rangeTo}
-              onChange={(e) => setRangeTo(e.target.value)}
-              style={input}
-            />
-          </div>
-          <button
-            type="button"
-            onClick={handleFetchManualRange}
-            disabled={
-              apiStatus.status === "running" || !rangeFrom || !rangeTo
-            }
-            style={
-              apiStatus.status === "running" || !rangeFrom || !rangeTo
-                ? btnDisabled
-                : btnPrimary
-            }
-          >
-            期間を取得
-          </button>
-        </div>
-
-        {apiStatus.status === "done" && (
-          <p style={{ color: "#5dd58c", marginTop: "0.8rem", fontSize: "0.9rem" }}>
-            ✅ {apiStatus.range}: API から {apiStatus.fetched} 件取得 → 新規{" "}
-            {apiStatus.saved} 件、スキップ {apiStatus.skipped} 件
-          </p>
-        )}
-        {apiStatus.status === "error" && (
-          <p style={{ color: "#ff6b6b", marginTop: "0.8rem", fontSize: "0.9rem" }}>
-            ❌ {apiStatus.message}
-          </p>
-        )}
-      </section>
+        <FrankfurterSection skipExisting={skipExisting} onComplete={reload} />
       )}
 
-      {/* 登録済みレートの折れ線グラフ */}
-      <section style={section}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
-          <h2 style={{ ...h2, marginBottom: 0 }}>
-            登録済みレートの推移{" "}
-            {stats && (
-              <span
-                style={{ color: "#666", fontWeight: 400, fontSize: "0.85rem" }}
-              >
-                ({stats.count.toLocaleString()} 件、
-                {dateOnly(stats.first.date)} 〜 {dateOnly(stats.last.date)})
-              </span>
-            )}
-          </h2>
-          {stats && stats.count > 0 && (
-            <button
-              type="button"
-              onClick={handleDeleteAll}
-              disabled={deleting}
-              style={deleting ? btnDangerDisabled : btnDanger}
-              title="登録されている FX レートをすべて削除"
-            >
-              {deleting ? "削除中..." : "🗑 全削除"}
-            </button>
-          )}
-        </div>
-
-        {/* 期間フィルタ */}
-        <div
-          style={{
-            display: "flex",
-            gap: "0.6rem",
-            alignItems: "flex-end",
-            flexWrap: "wrap",
-            marginBottom: "0.8rem",
-          }}
-        >
-          <div>
-            <label style={lbl}>From</label>
-            <input
-              type="date"
-              value={filterFrom}
-              onChange={(e) => setFilterFrom(e.target.value)}
-              style={input}
-            />
-          </div>
-          <div>
-            <label style={lbl}>To</label>
-            <input
-              type="date"
-              value={filterTo}
-              onChange={(e) => setFilterTo(e.target.value)}
-              style={input}
-            />
-          </div>
-          {(filterFrom || filterTo) && (
-            <button
-              type="button"
-              onClick={() => {
-                setFilterFrom("");
-                setFilterTo("");
-              }}
-              style={btnGhost}
-            >
-              フィルタクリア
-            </button>
-          )}
-        </div>
-
-        {loading && <p>読み込み中...</p>}
-        {error && <p style={{ color: "#ff6b6b" }}>❌ {error}</p>}
-
-        {!loading && !error && rows.length === 0 && (
-          <p style={{ color: "#888" }}>
-            {filterFrom || filterTo
-              ? "この期間にレートはありません"
-              : "まだレートがありません。上のセクションから取り込んでください。"}
-          </p>
-        )}
-
-        {!loading && rows.length > 0 && stats && (
-          <>
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={chartData}>
-                <CartesianGrid stroke="#222838" strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="date"
-                  stroke="#888"
-                  fontSize={12}
-                  minTickGap={40}
-                />
-                <YAxis
-                  stroke="#888"
-                  fontSize={12}
-                  domain={["auto", "auto"]}
-                  tickFormatter={(v) =>
-                    typeof v === "number" ? v.toFixed(1) : String(v)
-                  }
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: "#141823",
-                    border: "1px solid #2a3047",
-                  }}
-                  labelStyle={{ color: "#aab" }}
-                  formatter={(v) =>
-                    typeof v === "number" ? v.toFixed(3) : String(v)
-                  }
-                />
-                <Line
-                  type="monotone"
-                  dataKey="usd_jpy"
-                  stroke="#6cf"
-                  dot={false}
-                  strokeWidth={1.5}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-
-            <div
-              style={{
-                display: "flex",
-                gap: "1.5rem",
-                marginTop: "0.6rem",
-                fontSize: "0.85rem",
-                color: "#aab",
-                flexWrap: "wrap",
-              }}
-            >
-              <span>
-                最新: <strong style={{ color: "#e6e6e6" }}>
-                  {dateOnly(stats.last.date)} = {stats.last.usd_jpy.toFixed(3)}
-                </strong>
-              </span>
-              <span>
-                Min: <strong style={{ color: "#aab" }}>{stats.min.toFixed(3)}</strong>
-              </span>
-              <span>
-                Max: <strong style={{ color: "#aab" }}>{stats.max.toFixed(3)}</strong>
-              </span>
-            </div>
-          </>
-        )}
-      </section>
+      <RateChart
+        rows={rows}
+        loading={loading}
+        error={error}
+        filterFrom={filterFrom}
+        filterTo={filterTo}
+        onFilterFromChange={setFilterFrom}
+        onFilterToChange={setFilterTo}
+        onDeleteAll={handleDeleteAll}
+        deleting={deleting}
+      />
     </div>
   );
 }
-
