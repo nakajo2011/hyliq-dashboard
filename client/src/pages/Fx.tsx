@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { pb } from "../lib/pb";
+import { pb, PB_URL } from "../lib/pb";
 import {
   fetchFrankfurterRange,
   parseBulkFxInput,
@@ -52,6 +52,21 @@ export function Fx() {
         fetched: number;
         saved: number;
         skipped: number;
+      }
+    | { status: "error"; message: string }
+  >({ status: "idle" });
+
+  const [mufgStatus, setMufgStatus] = useState<
+    | { status: "idle" }
+    | { status: "running"; total: number }
+    | {
+        status: "done";
+        requestedDates: number;
+        fetched: number;
+        saved: number;
+        skipped: number;
+        nonBusiness: number;
+        failed: number;
       }
     | { status: "error"; message: string }
   >({ status: "idle" });
@@ -183,6 +198,54 @@ export function Fx() {
     await apiFetchAndStore(rangeFrom, rangeTo);
   };
 
+  const handleFetchMufg = async () => {
+    // Count distinct trade dates first so we can show progress estimate.
+    let totalDates = 0;
+    try {
+      const trades = await pb
+        .collection("trades")
+        .getFullList<{ time: string }>({ fields: "time" });
+      const dateSet = new Set<string>();
+      for (const t of trades) dateSet.add(dateKeyJst(t.time));
+      totalDates = dateSet.size;
+    } catch {
+      // estimate unknown
+    }
+    if (totalDates === 0) {
+      alert("取引データがありません。Upload からインポートしてください。");
+      return;
+    }
+
+    setMufgStatus({ status: "running", total: totalDates });
+    try {
+      const url = `${PB_URL}/api/sync-fx-mufg?skipExisting=${skipExisting}`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setMufgStatus({
+        status: "done",
+        requestedDates: data.requestedDates ?? 0,
+        fetched: data.fetched ?? 0,
+        saved: data.saved ?? 0,
+        skipped: data.skipped ?? 0,
+        nonBusiness: data.nonBusiness ?? 0,
+        failed: data.failed ?? 0,
+      });
+      await reload();
+    } catch (e) {
+      setMufgStatus({
+        status: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!window.confirm("このレートを削除しますか？")) return;
     try {
@@ -201,12 +264,60 @@ export function Fx() {
         該当日が無い場合は直近過去のレートが自動的に使われます (carry-forward)。
       </p>
 
+      <section style={{ ...section, borderColor: "#2d5a3d", background: "#15281c" }}>
+        <h2 style={h2}>
+          MUFG TTM を取得 <span style={{ color: "#5dd58c", fontSize: "0.8rem" }}>(確定申告で推奨)</span>
+        </h2>
+        <p style={{ color: "#aab", fontSize: "0.85rem", marginTop: 0 }}>
+          三菱UFJ銀行 公示仲値 (TTM) を MURC (三菱UFJリサーチ&コンサルティング) サイトから一括取得します。
+          国税庁が認める銀行公示レートで、日本の確定申告で最も使われる標準です。
+          取引日 1 件あたり 1 リクエストかかるので、初回は数分かかります (週末・祝日は自動でスキップ)。
+        </p>
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <button
+            type="button"
+            onClick={handleFetchMufg}
+            disabled={mufgStatus.status === "running"}
+            style={
+              mufgStatus.status === "running" ? btnDisabled : btnPrimary
+            }
+          >
+            {mufgStatus.status === "running"
+              ? `取得中... (約 ${mufgStatus.total} 件処理)`
+              : "取引日の全範囲を MUFG TTM で取得"}
+          </button>
+          <span style={{ color: "#666", fontSize: "0.85rem" }}>
+            「既存レートを上書きしない」設定が共通で適用されます
+          </span>
+        </div>
+        {mufgStatus.status === "done" && (
+          <p style={{ color: "#5dd58c", marginTop: "0.8rem", fontSize: "0.9rem" }}>
+            ✅ 要求 {mufgStatus.requestedDates} 件 → 新規 {mufgStatus.saved} 件、
+            スキップ {mufgStatus.skipped} 件、休日 {mufgStatus.nonBusiness} 件
+            {mufgStatus.failed > 0 && (
+              <span style={{ color: "#ff8c8c" }}>、失敗 {mufgStatus.failed} 件</span>
+            )}
+          </p>
+        )}
+        {mufgStatus.status === "error" && (
+          <p style={{ color: "#ff6b6b", marginTop: "0.8rem", fontSize: "0.9rem" }}>
+            ❌ {mufgStatus.message}
+          </p>
+        )}
+      </section>
+
       <section style={section}>
         <h2 style={h2}>API から取得 (Frankfurter / ECB)</h2>
         <p style={{ color: "#888", fontSize: "0.85rem", marginTop: 0 }}>
           Frankfurter API (ECB が公開する日次レート、無料・API キー不要) から USD/JPY を一括取得します。
-          週末・祝日は ECB が公開しないため欠落しますが、後段の carry-forward で吸収されます。
-          確定申告では原則 銀行公示 TTM レートですが、ECB ベースは実務上の目安として広く使われています。
+          MUFG TTM とは数値が微妙に異なる (通常 0.1〜0.5 円差) ので、確定申告の本番には MUFG TTM 推奨。速報/参考用途向けです。
         </p>
 
         <label
