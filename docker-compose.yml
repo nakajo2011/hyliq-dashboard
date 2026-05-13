@@ -13,3 +13,24 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  client:
+    # Vite dev server. node_modules is in a named volume (isolated from host)
+    # so the container manages its own deps. Source files come from the host
+    # bind mount so HMR picks up edits.
+    image: node:22-bookworm-slim
+    container_name: hyliq_client
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "npm install --no-audit --no-fund && npm run dev -- --host 0.0.0.0"
+    volumes:
+      - ./client:/app
+      - client_node_modules:/app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      pocketbase:
+        condition: service_healthy
+
+volumes:
+  client_node_modules:

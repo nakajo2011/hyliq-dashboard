@@ -20,19 +20,34 @@ hyliq_dashboard/
 
 ## セットアップ
 
-### 1. PocketBase 起動
-
-ホスト側 (Docker が動く環境) で:
+### 1. 一括起動 (推奨)
 
 ```sh
 docker compose up -d
 ```
 
-- 管理画面: <http://localhost:8090/_/>
-- 初回アクセスで管理者ユーザーを作成
-- `pb_migrations/` 配下の migration が自動適用され、コレクションが作成されます
+これで PocketBase (8090) と Vite dev server (5173) が両方立ち上がります。
 
-### 2. クライアント起動
+- PocketBase 管理画面: <http://localhost:8090/_/> (初回は管理者作成)
+- アプリ: <http://localhost:5173/>
+- `pb_migrations/` 配下の migration が自動適用、Vite は host bind mount で
+  HMR (ソース変更が即反映)、`node_modules` は named volume `client_node_modules`
+  に隔離
+
+### サービス別の操作
+
+```sh
+docker compose restart client      # Vite だけ再起動
+docker compose restart pocketbase  # PocketBase だけ再起動
+docker compose logs -f client      # Vite ログ追従
+docker compose stop client         # Vite だけ停止
+docker compose down                # 全停止 (named volume は残る)
+docker compose down -v             # 全停止 + named volume 削除 (node_modules リセット)
+```
+
+### IDE 開発用に host で直接動かしたい場合
+
+`docker compose stop client` してから:
 
 ```sh
 cd client
@@ -41,8 +56,7 @@ npm install
 npm run dev
 ```
 
-- 開発サーバー: <http://localhost:5173/>
-- 起動するとトップ画面で PocketBase へのヘルスチェックとコレクションの存在確認が走ります
+(host の `client/node_modules` は IDE 用に独立して保持される)
 
 ### 開発時のチェック
 
