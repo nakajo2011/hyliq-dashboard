@@ -59,6 +59,13 @@ export function Fx() {
   const [skipExisting, setSkipExisting] = useState(true);
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
+
+  // ── 登録済みレート一覧のページネーション + フィルタ ────────────────
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(50);
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+  const [pageInfo, setPageInfo] = useState({ totalItems: 0, totalPages: 0 });
   const [apiStatus, setApiStatus] = useState<
     | { status: "idle" }
     | { status: "running" }
@@ -76,10 +83,28 @@ export function Fx() {
     setLoading(true);
     setError(null);
     try {
-      const list = await pb
+      const filterParts: string[] = [];
+      if (filterFrom) filterParts.push(`date >= "${filterFrom} 00:00:00.000Z"`);
+      if (filterTo) {
+        // Inclusive upper bound: use next day at 00:00 as the strict cap.
+        const d = new Date(filterTo + "T00:00:00Z");
+        d.setUTCDate(d.getUTCDate() + 1);
+        const endExclusive = d.toISOString().slice(0, 10);
+        filterParts.push(`date < "${endExclusive} 00:00:00.000Z"`);
+      }
+      const filter = filterParts.join(" && ");
+
+      const res = await pb
         .collection("fx_rates")
-        .getFullList<FxRow>({ sort: "-date" });
-      setRows(list);
+        .getList<FxRow>(page, perPage, {
+          sort: "-date",
+          filter: filter || undefined,
+        });
+      setRows(res.items);
+      setPageInfo({
+        totalItems: res.totalItems,
+        totalPages: res.totalPages,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -87,9 +112,11 @@ export function Fx() {
     }
   };
 
+  // Reload whenever page / page size / filter changes.
   useEffect(() => {
     reload();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, perPage, filterFrom, filterTo]);
 
   const handleAddSingle = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -275,6 +302,49 @@ export function Fx() {
         該当日が無い場合は直近過去のレートが自動的に使われます (carry-forward)。
       </p>
 
+      {/* 共通設定: 以下の全ての取り込み方法に共通で適用される */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          marginTop: "1rem",
+          padding: "0.7rem 1rem",
+          background: "#1c2030",
+          border: "1px solid #2a3047",
+          borderRadius: 8,
+        }}
+      >
+        <span
+          style={{
+            fontSize: "0.75rem",
+            color: "#888",
+            textTransform: "uppercase",
+            letterSpacing: 0.5,
+          }}
+        >
+          共通設定
+        </span>
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: "0.9rem",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={skipExisting}
+            onChange={(e) => setSkipExisting(e.target.checked)}
+          />
+          既存レートを上書きしない
+        </label>
+        <span style={{ fontSize: "0.8rem", color: "#666" }}>
+          (みずほ / Frankfurter / 複数行ペースト すべての取り込みに適用)
+        </span>
+      </div>
+
       <section
         style={{
           ...section,
@@ -401,7 +471,7 @@ export function Fx() {
                   {mizuhoStatus.status === "running" ? "保存中..." : "保存"}
                 </button>
                 <span style={{ marginLeft: 12, fontSize: "0.85rem", color: "#aab" }}>
-                  「既存レートを上書きしない」設定が共通で適用されます
+                  ↑ ページ上部の「共通設定」が適用されます
                 </span>
               </div>
             </li>
@@ -427,23 +497,6 @@ export function Fx() {
           週末・祝日は ECB が公開しないため欠落しますが、後段の carry-forward で吸収されます。
           確定申告では原則 銀行公示 TTM レートですが、ECB ベースは実務上の目安として広く使われています。
         </p>
-
-        <label
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            marginBottom: 12,
-            fontSize: "0.9rem",
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={skipExisting}
-            onChange={(e) => setSkipExisting(e.target.checked)}
-          />
-          既存レートを上書きしない
-        </label>
 
         <div
           style={{
@@ -634,41 +687,174 @@ export function Fx() {
       </section>
 
       <section style={section}>
-        <h2 style={h2}>登録済みレート ({rows.length} 件)</h2>
+        <h2 style={h2}>
+          登録済みレート ({pageInfo.totalItems.toLocaleString()} 件)
+        </h2>
+
+        {/* フィルタ + ページサイズ */}
+        <div
+          style={{
+            display: "flex",
+            gap: "0.6rem",
+            alignItems: "flex-end",
+            flexWrap: "wrap",
+            marginBottom: "0.8rem",
+          }}
+        >
+          <div>
+            <label style={lbl}>From</label>
+            <input
+              type="date"
+              value={filterFrom}
+              onChange={(e) => {
+                setFilterFrom(e.target.value);
+                setPage(1);
+              }}
+              style={input}
+            />
+          </div>
+          <div>
+            <label style={lbl}>To</label>
+            <input
+              type="date"
+              value={filterTo}
+              onChange={(e) => {
+                setFilterTo(e.target.value);
+                setPage(1);
+              }}
+              style={input}
+            />
+          </div>
+          {(filterFrom || filterTo) && (
+            <button
+              type="button"
+              onClick={() => {
+                setFilterFrom("");
+                setFilterTo("");
+                setPage(1);
+              }}
+              style={btnGhost}
+            >
+              フィルタクリア
+            </button>
+          )}
+          <div style={{ marginLeft: "auto" }}>
+            <label style={lbl}>表示件数</label>
+            <select
+              value={perPage}
+              onChange={(e) => {
+                setPerPage(Number(e.target.value));
+                setPage(1);
+              }}
+              style={input}
+            >
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={200}>200</option>
+            </select>
+          </div>
+        </div>
+
         {loading && <p>読み込み中...</p>}
         {error && <p style={{ color: "#ff6b6b" }}>❌ {error}</p>}
-        {!loading && !error && rows.length === 0 && (
-          <p style={{ color: "#888" }}>まだレートがありません</p>
+        {!loading && !error && pageInfo.totalItems === 0 && (
+          <p style={{ color: "#888" }}>
+            {filterFrom || filterTo
+              ? "この期間にレートはありません"
+              : "まだレートがありません"}
+          </p>
         )}
         {!loading && rows.length > 0 && (
-          <table style={table}>
-            <thead>
-              <tr style={trHead}>
-                <th style={th}>日付</th>
-                <th style={{ ...th, textAlign: "right" }}>USD/JPY</th>
-                <th style={th}>登録元</th>
-                <th style={th}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.id} style={trRow}>
-                  <td style={td}>{dateOnly(r.date)}</td>
-                  <td style={tdRight}>{r.usd_jpy.toFixed(3)}</td>
-                  <td style={{ ...td, color: "#888" }}>{r.source || "-"}</td>
-                  <td style={{ ...td, textAlign: "right" }}>
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(r.id)}
-                      style={btnDanger}
-                    >
-                      削除
-                    </button>
-                  </td>
+          <>
+            <table style={table}>
+              <thead>
+                <tr style={trHead}>
+                  <th style={th}>日付</th>
+                  <th style={{ ...th, textAlign: "right" }}>USD/JPY</th>
+                  <th style={th}>登録元</th>
+                  <th style={th}></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} style={trRow}>
+                    <td style={td}>{dateOnly(r.date)}</td>
+                    <td style={tdRight}>{r.usd_jpy.toFixed(3)}</td>
+                    <td style={{ ...td, color: "#888" }}>{r.source || "-"}</td>
+                    <td style={{ ...td, textAlign: "right" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(r.id)}
+                        style={btnDanger}
+                      >
+                        削除
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* ページネーション */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                marginTop: "0.8rem",
+                fontSize: "0.88rem",
+                color: "#aab",
+              }}
+            >
+              <span>
+                {(page - 1) * perPage + 1} 〜{" "}
+                {Math.min(page * perPage, pageInfo.totalItems)} /{" "}
+                {pageInfo.totalItems.toLocaleString()} 件
+              </span>
+              <span style={{ marginLeft: "auto" }}>
+                ページ {page} / {pageInfo.totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage(1)}
+                disabled={page <= 1}
+                style={page <= 1 ? btnGhostDisabled : btnGhost}
+              >
+                ≪
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                style={page <= 1 ? btnGhostDisabled : btnGhost}
+              >
+                前へ
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setPage((p) => Math.min(pageInfo.totalPages, p + 1))
+                }
+                disabled={page >= pageInfo.totalPages}
+                style={
+                  page >= pageInfo.totalPages ? btnGhostDisabled : btnGhost
+                }
+              >
+                次へ
+              </button>
+              <button
+                type="button"
+                onClick={() => setPage(pageInfo.totalPages)}
+                disabled={page >= pageInfo.totalPages}
+                style={
+                  page >= pageInfo.totalPages ? btnGhostDisabled : btnGhost
+                }
+              >
+                ≫
+              </button>
+            </div>
+          </>
         )}
       </section>
     </div>
@@ -722,6 +908,19 @@ const btnDanger: React.CSSProperties = {
   borderRadius: 6,
   padding: "0.3rem 0.7rem",
   cursor: "pointer",
+};
+const btnGhost: React.CSSProperties = {
+  background: "transparent",
+  color: "#aab",
+  border: "1px solid #2a3047",
+  borderRadius: 6,
+  padding: "0.3rem 0.7rem",
+  cursor: "pointer",
+};
+const btnGhostDisabled: React.CSSProperties = {
+  ...btnGhost,
+  color: "#555",
+  cursor: "not-allowed",
 };
 const table: React.CSSProperties = {
   width: "100%",
