@@ -23,7 +23,7 @@ import {
   type TaxTradeInput,
   type TaxTransferInput,
 } from "../lib/tax";
-import type { TradeLike } from "../lib/pnl";
+import { dateKeyJst, type TradeLike } from "../lib/pnl";
 
 type TradeRecord = TradeLike & { id: string; account: string };
 type FundingRecord = {
@@ -187,6 +187,29 @@ export function TaxReport() {
     );
   };
 
+  const handleToggleTaxable = async (
+    transferId: string,
+    taxable: boolean
+  ) => {
+    try {
+      await pb.collection("transfers").update(transferId, { taxable });
+    } catch (e) {
+      alert(
+        "更新失敗: " + (e instanceof Error ? e.message : String(e))
+      );
+      return;
+    }
+    setState((prev) => {
+      if (prev.status !== "ready") return prev;
+      return {
+        ...prev,
+        transfers: prev.transfers.map((t) =>
+          t.id === transferId ? { ...t, taxable } : t
+        ),
+      };
+    });
+  };
+
   return (
     <ReportView
       year={activeYear}
@@ -197,6 +220,7 @@ export function TaxReport() {
       transfers={state.transfers}
       fxRates={state.fxRates}
       onFxChanged={reloadFxRates}
+      onToggleTaxable={handleToggleTaxable}
     />
   );
 }
@@ -210,6 +234,7 @@ function ReportView({
   transfers,
   fxRates,
   onFxChanged,
+  onToggleTaxable,
 }: {
   year: number;
   availableYears: number[];
@@ -219,11 +244,37 @@ function ReportView({
   transfers: TaxTransferInput[];
   fxRates: FxRate[];
   onFxChanged: () => Promise<void>;
+  onToggleTaxable: (transferId: string, taxable: boolean) => Promise<void>;
 }) {
   const lookup = useMemo(() => buildFxLookup(fxRates), [fxRates]);
   const report = useMemo(
     () => buildTaxReport(trades, fundings, transfers, lookup, year),
     [trades, fundings, transfers, lookup, year]
+  );
+
+  // Filter raw arrays by year for the per-kind detail tables. (The report
+  // above only contains taxable transfers — we want to show ALL transfers
+  // here so the user can toggle taxable per row.)
+  const yearTrades = useMemo(
+    () =>
+      trades
+        .filter((t) => Number(dateKeyJst(t.time).slice(0, 4)) === year)
+        .sort((a, b) => a.time.localeCompare(b.time)),
+    [trades, year]
+  );
+  const yearFundings = useMemo(
+    () =>
+      fundings
+        .filter((f) => Number(dateKeyJst(f.time).slice(0, 4)) === year)
+        .sort((a, b) => a.time.localeCompare(b.time)),
+    [fundings, year]
+  );
+  const yearTransfers = useMemo(
+    () =>
+      transfers
+        .filter((t) => Number(dateKeyJst(t.time).slice(0, 4)) === year)
+        .sort((a, b) => a.time.localeCompare(b.time)),
+    [transfers, year]
   );
 
   const [editingDate, setEditingDate] = useState<string | null>(null);
@@ -395,159 +446,363 @@ function ReportView({
       </section>
 
       <section style={section}>
-        <h2 style={h2}>明細 ({report.rows.length} 件)</h2>
-        {report.rows.length === 0 ? (
-          <p style={{ color: "#666" }}>この年度に対象データはありません</p>
+        <h2 style={h2}>取引明細 ({yearTrades.length} 件)</h2>
+        {yearTrades.length === 0 ? (
+          <p style={{ color: "#666" }}>この年度に取引はありません</p>
         ) : (
           <table style={table}>
             <thead>
               <tr style={trHead}>
                 <th style={th}>日付</th>
-                <th style={th}>種別</th>
                 <th style={th}>アカウント</th>
-                <th style={th}>内容</th>
+                <th style={th}>通貨</th>
+                <th style={th}>方向</th>
+                <th style={tdRightHead}>数量</th>
+                <th style={tdRightHead}>価格</th>
+                <th style={tdRightHead}>PnL (USD)</th>
+                <th style={tdRightHead}>USD/JPY</th>
+                <th style={tdRightHead}>PnL (JPY)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {yearTrades.map((t) => {
+                const date = dateKeyJst(t.time);
+                const fx = lookup(date);
+                const jpy = fx ? t.closed_pnl * fx.rate : null;
+                return (
+                  <tr key={t.id} style={trRow}>
+                    <td style={td}>{date}</td>
+                    <td style={td}>{t.accountName}</td>
+                    <td style={td}>{t.coin}</td>
+                    <td
+                      style={{
+                        ...td,
+                        color: t.dir.includes("Long") ? "#5dd58c" : "#ff8c8c",
+                      }}
+                    >
+                      {t.dir}
+                    </td>
+                    <td style={tdRight}>
+                      {t.sz.toLocaleString(undefined, {
+                        maximumFractionDigits: 6,
+                      })}
+                    </td>
+                    <td style={tdRight}>{t.px.toFixed(2)}</td>
+                    <td
+                      style={{
+                        ...tdRight,
+                        color: t.closed_pnl >= 0 ? "#5dd58c" : "#ff8c8c",
+                      }}
+                    >
+                      {t.closed_pnl.toFixed(4)}
+                    </td>
+                    <FxCell
+                      date={date}
+                      fx={fx}
+                      editing={editingDate === date}
+                      editValue={editValue}
+                      setEditValue={setEditValue}
+                      onStart={() => startEdit(date, fx?.rate ?? null)}
+                      onSave={saveEdit}
+                      onCancel={cancelEdit}
+                      saving={saving}
+                    />
+                    <JpyCell amount={jpy} />
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section style={section}>
+        <h2 style={h2}>
+          ファンディング明細 ({yearFundings.length} 件 — 全件が課税対象)
+        </h2>
+        {yearFundings.length === 0 ? (
+          <p style={{ color: "#666" }}>この年度にファンディングはありません</p>
+        ) : (
+          <table style={table}>
+            <thead>
+              <tr style={trHead}>
+                <th style={th}>日付</th>
+                <th style={th}>アカウント</th>
+                <th style={th}>通貨</th>
+                <th style={th}>Side</th>
                 <th style={tdRightHead}>金額 (USD)</th>
                 <th style={tdRightHead}>USD/JPY</th>
                 <th style={tdRightHead}>金額 (JPY)</th>
               </tr>
             </thead>
             <tbody>
-              {report.rows.map((r) => (
-                <tr key={`${r.kind}-${r.id}`} style={trRow}>
-                  <td style={td}>{r.date}</td>
-                  <td
-                    style={{
-                      ...td,
-                      color:
-                        r.kind === "trade"
-                          ? "#aab"
-                          : r.kind === "funding"
-                            ? "#f5d678"
-                            : "#6cf",
-                      fontSize: "0.78rem",
-                    }}
-                  >
-                    {KIND_LABEL_JA[r.kind]}
-                  </td>
-                  <td style={td}>{r.accountName}</td>
-                  <td style={td}>{r.description}</td>
-                  <td
-                    style={{
-                      ...tdRight,
-                      color: r.amount_usd >= 0 ? "#5dd58c" : "#ff8c8c",
-                    }}
-                  >
-                    {r.amount_usd.toFixed(4)}
-                  </td>
-                  <td style={tdRight}>
-                    {editingDate === r.date ? (
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          gap: 4,
-                          alignItems: "center",
-                        }}
-                      >
-                        <input
-                          autoFocus
-                          type="number"
-                          step="0.001"
-                          min="0.001"
-                          value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") saveEdit();
-                            if (e.key === "Escape") cancelEdit();
-                          }}
-                          style={inlineInput}
-                          disabled={saving}
-                        />
-                        <button
-                          type="button"
-                          onClick={saveEdit}
-                          disabled={saving}
-                          style={btnInlinePrimary}
-                          title="保存 (Enter)"
-                        >
-                          ✓
-                        </button>
-                        <button
-                          type="button"
-                          onClick={cancelEdit}
-                          disabled={saving}
-                          style={btnInlineGhost}
-                          title="キャンセル (Esc)"
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ) : r.fx_rate != null ? (
-                      <span
-                        onClick={() => startEdit(r.date, r.fx_rate)}
-                        title={
-                          r.fx_carried_forward
-                            ? `${r.fx_date} のレートを carry-forward 中。クリックで ${r.date} のレートを直接登録`
-                            : "クリックして編集"
-                        }
-                        style={{
-                          color: r.fx_carried_forward ? "#f5d678" : "#aab",
-                          cursor: "pointer",
-                          borderBottom: "1px dotted #555",
-                        }}
-                      >
-                        {r.fx_rate.toFixed(3)}
-                        {r.fx_carried_forward && "*"}
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => startEdit(r.date, null)}
-                        style={btnInlineMissing}
-                        title="この日のレートを入力"
-                      >
-                        + 入力
-                      </button>
-                    )}
-                  </td>
-                  <td
-                    style={{
-                      ...tdRight,
-                      color:
-                        r.amount_jpy == null
-                          ? "#666"
-                          : r.amount_jpy >= 0
-                            ? "#5dd58c"
-                            : "#ff8c8c",
-                    }}
-                  >
-                    {r.amount_jpy != null
-                      ? r.amount_jpy.toLocaleString(undefined, {
-                          maximumFractionDigits: 0,
-                        })
-                      : "-"}
-                  </td>
-                </tr>
-              ))}
+              {yearFundings.map((f) => {
+                const date = dateKeyJst(f.time);
+                const fx = lookup(date);
+                const jpy = fx ? f.payment * fx.rate : null;
+                return (
+                  <tr key={f.id} style={trRow}>
+                    <td style={td}>{date}</td>
+                    <td style={td}>{f.accountName}</td>
+                    <td style={td}>{f.coin}</td>
+                    <td style={td}>{f.side}</td>
+                    <td
+                      style={{
+                        ...tdRight,
+                        color: f.payment >= 0 ? "#5dd58c" : "#ff8c8c",
+                      }}
+                    >
+                      {f.payment.toFixed(4)}
+                    </td>
+                    <FxCell
+                      date={date}
+                      fx={fx}
+                      editing={editingDate === date}
+                      editValue={editValue}
+                      setEditValue={setEditValue}
+                      onStart={() => startEdit(date, fx?.rate ?? null)}
+                      onSave={saveEdit}
+                      onCancel={cancelEdit}
+                      saving={saving}
+                    />
+                    <JpyCell amount={jpy} />
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
-        <p style={{ color: "#888", fontSize: "0.8rem", marginTop: 8 }}>
-          USD/JPY 列をクリックすると、その日のレートを直接登録できます
-          (同じ日付のレコードすべてに自動反映されます)。
-          * 印は当日のレート未登録のため直近過去のレートで換算した行。
-          ファンディングは全件、入出金は アカウント詳細で「課税対象」を ON
-          にした行のみ含まれます。
-        </p>
       </section>
+
+      <section style={section}>
+        <h2 style={h2}>
+          入出金明細 ({yearTransfers.length} 件 / 課税対象{" "}
+          {yearTransfers.filter((t) => t.taxable).length} 件)
+        </h2>
+        <p
+          style={{
+            color: "#888",
+            fontSize: "0.82rem",
+            marginTop: 0,
+            marginBottom: 8,
+          }}
+        >
+          自己送金 (取引所間の振替) は課税対象外。サービス対価・贈与・
+          売却代金など、実際の収入として受け取った USDC のみ
+          「課税対象」にチェックを入れてください。出金行も列挙されますが
+          通常はチェック不要です。
+        </p>
+        {yearTransfers.length === 0 ? (
+          <p style={{ color: "#666" }}>この年度に入出金はありません</p>
+        ) : (
+          <table style={table}>
+            <thead>
+              <tr style={trHead}>
+                <th style={th}>日付</th>
+                <th style={th}>アカウント</th>
+                <th style={th}>Action</th>
+                <th style={th}>From → To</th>
+                <th style={tdRightHead}>金額</th>
+                <th style={th}>通貨</th>
+                <th style={{ ...th, textAlign: "center" }}>課税対象</th>
+                <th style={tdRightHead}>USD/JPY</th>
+                <th style={tdRightHead}>金額 (JPY)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {yearTransfers.map((tr) => {
+                const date = dateKeyJst(tr.time);
+                const fx = lookup(date);
+                const jpy =
+                  tr.taxable && fx ? tr.account_value_change * fx.rate : null;
+                return (
+                  <tr key={tr.id} style={trRow}>
+                    <td style={td}>{date}</td>
+                    <td style={td}>{tr.accountName}</td>
+                    <td style={td}>{tr.action}</td>
+                    <td
+                      style={{
+                        ...td,
+                        color: "#aab",
+                        fontSize: "0.82rem",
+                      }}
+                    >
+                      {tr.source} → {tr.destination}
+                    </td>
+                    <td
+                      style={{
+                        ...tdRight,
+                        color:
+                          tr.account_value_change >= 0 ? "#5dd58c" : "#ff8c8c",
+                      }}
+                    >
+                      {tr.account_value_change.toFixed(4)}
+                    </td>
+                    <td style={td}>{tr.currency}</td>
+                    <td style={{ ...td, textAlign: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={tr.taxable}
+                        onChange={(e) =>
+                          onToggleTaxable(tr.id, e.target.checked)
+                        }
+                        title="確定申告で「その他収入」として計上する"
+                      />
+                    </td>
+                    <FxCell
+                      date={date}
+                      fx={fx}
+                      editing={editingDate === date}
+                      editValue={editValue}
+                      setEditValue={setEditValue}
+                      onStart={() => startEdit(date, fx?.rate ?? null)}
+                      onSave={saveEdit}
+                      onCancel={cancelEdit}
+                      saving={saving}
+                    />
+                    <JpyCell
+                      amount={jpy}
+                      placeholder={!tr.taxable ? "—" : "-"}
+                    />
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <p style={{ color: "#888", fontSize: "0.8rem", marginTop: 12 }}>
+        USD/JPY 列をクリックすると、その日のレートを直接登録できます
+        (同じ日付のレコードすべてに自動反映)。* 印は直近過去レートを
+        carry-forward 中の行。
+      </p>
     </div>
   );
 }
 
-const KIND_LABEL_JA: Record<TaxReport["rows"][number]["kind"], string> = {
-  trade: "取引",
-  funding: "Funding",
-  transfer: "その他",
-};
+interface FxCellProps {
+  date: string;
+  fx: { rate: number; fxDate: string; carriedForward: boolean } | null;
+  editing: boolean;
+  editValue: string;
+  setEditValue: (v: string) => void;
+  onStart: () => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+}
+
+function FxCell({
+  date,
+  fx,
+  editing,
+  editValue,
+  setEditValue,
+  onStart,
+  onSave,
+  onCancel,
+  saving,
+}: FxCellProps) {
+  return (
+    <td style={tdRight}>
+      {editing ? (
+        <span
+          style={{
+            display: "inline-flex",
+            gap: 4,
+            alignItems: "center",
+          }}
+        >
+          <input
+            autoFocus
+            type="number"
+            step="0.001"
+            min="0.001"
+            value={editValue}
+            onChange={(e) => setEditValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onSave();
+              if (e.key === "Escape") onCancel();
+            }}
+            style={inlineInput}
+            disabled={saving}
+          />
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saving}
+            style={btnInlinePrimary}
+            title="保存 (Enter)"
+          >
+            ✓
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            style={btnInlineGhost}
+            title="キャンセル (Esc)"
+          >
+            ×
+          </button>
+        </span>
+      ) : fx ? (
+        <span
+          onClick={onStart}
+          title={
+            fx.carriedForward
+              ? `${fx.fxDate} のレートを carry-forward 中。クリックで ${date} のレートを直接登録`
+              : "クリックして編集"
+          }
+          style={{
+            color: fx.carriedForward ? "#f5d678" : "#aab",
+            cursor: "pointer",
+            borderBottom: "1px dotted #555",
+          }}
+        >
+          {fx.rate.toFixed(3)}
+          {fx.carriedForward && "*"}
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onStart}
+          style={btnInlineMissing}
+          title="この日のレートを入力"
+        >
+          + 入力
+        </button>
+      )}
+    </td>
+  );
+}
+
+function JpyCell({
+  amount,
+  placeholder = "-",
+}: {
+  amount: number | null;
+  placeholder?: string;
+}) {
+  return (
+    <td
+      style={{
+        ...tdRight,
+        color:
+          amount == null
+            ? "#666"
+            : amount >= 0
+              ? "#5dd58c"
+              : "#ff8c8c",
+      }}
+    >
+      {amount != null
+        ? amount.toLocaleString(undefined, { maximumFractionDigits: 0 })
+        : placeholder}
+    </td>
+  );
+}
 
 function Kpis({ report }: { report: TaxReport }) {
   const kpis = [
