@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { pb } from "../../lib/pb";
 import {
   parseMizuhoCsv,
@@ -7,7 +7,16 @@ import {
 } from "../../lib/fx";
 import { dateKeyJst } from "../../lib/pnl";
 import { dateOnly } from "../../lib/format";
-import { btnDisabled, btnPrimary, COLORS, h2, section } from "../../styles";
+import {
+  btnDisabled,
+  btnGhost,
+  btnPrimary,
+  COLORS,
+  h2,
+  input,
+  lbl,
+  section,
+} from "../../styles";
 
 interface Props {
   /** Mirrors the parent's common-settings "skip existing" toggle. */
@@ -16,11 +25,14 @@ interface Props {
   onComplete: () => Promise<void>;
 }
 
-type FilterInfo = {
-  totalParsed: number;
-  droppedBeforeTrades: number;
-  earliestTradeDate: string | null;
-};
+interface ParsedInfo {
+  /** All rates parsed from the CSV, full range. */
+  parsed: MizuhoParseResult;
+  /** Default From inferred from the earliest date across trades/fundings/transfers. */
+  defaultFrom: string;
+  /** Default To = parsed.range.end. */
+  defaultTo: string;
+}
 
 type SaveStatus =
   | { status: "idle" }
@@ -28,64 +40,79 @@ type SaveStatus =
   | { status: "done"; saved: number; skipped: number }
   | { status: "error"; message: string };
 
-/** Drag&drop area + parse + filter-by-trade-range + upsert. */
+/**
+ * Drag&drop upload of Mizuho quote.csv. After parsing, the user reviews the
+ * import range (defaults to "earliest date across all 3 record sets → CSV
+ * latest date") and confirms. Rates outside the range are skipped to save
+ * DB space.
+ */
 export function MizuhoSection({ skipExisting, onComplete }: Props) {
   const [file, setFile] = useState<File | null>(null);
-  const [parsed, setParsed] = useState<MizuhoParseResult | null>(null);
-  const [filterInfo, setFilterInfo] = useState<FilterInfo | null>(null);
+  const [info, setInfo] = useState<ParsedInfo | null>(null);
+  const [importFrom, setImportFrom] = useState("");
+  const [importTo, setImportTo] = useState("");
   const [status, setStatus] = useState<SaveStatus>({ status: "idle" });
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const handleFile = async (f: File) => {
-    setFile(f);
-    setParsed(null);
-    setFilterInfo(null);
-    setStatus({ status: "idle" });
-    try {
-      // Earliest trade date (JST) — used to skip pre-trade rows.
-      let earliest: string | null = null;
+  /** Look up the earliest existing record date across trades/fundings/transfers. */
+  const fetchEarliestRecordDate = async (): Promise<string | null> => {
+    const fetchEarliest = async (collection: string) => {
       try {
-        const first = await pb
-          .collection("trades")
+        const res = await pb
+          .collection(collection)
           .getList<{ time: string }>(1, 1, {
             sort: "+time",
             fields: "time",
           });
-        if (first.items.length > 0) {
-          earliest = dateKeyJst(first.items[0].time);
-        }
+        if (res.items.length > 0) return dateKeyJst(res.items[0].time);
       } catch {
-        // ignore — proceed without filtering
+        // ignore
+      }
+      return null;
+    };
+
+    const candidates = await Promise.all([
+      fetchEarliest("trades"),
+      fetchEarliest("fundings"),
+      fetchEarliest("transfers"),
+    ]);
+    const valid = candidates.filter((d): d is string => d !== null);
+    if (valid.length === 0) return null;
+    return valid.reduce((min, d) => (d < min ? d : min));
+  };
+
+  const handleFile = async (f: File) => {
+    setFile(f);
+    setInfo(null);
+    setImportFrom("");
+    setImportTo("");
+    setStatus({ status: "idle" });
+
+    try {
+      const [earliestRecord, buf] = await Promise.all([
+        fetchEarliestRecordDate(),
+        f.arrayBuffer(),
+      ]);
+      const parsed = parseMizuhoCsv(buf);
+
+      if (parsed.rates.length === 0) {
+        if (parsed.errors.length > 0) {
+          setStatus({ status: "error", message: parsed.errors[0] });
+        }
+        return;
       }
 
-      const buf = await f.arrayBuffer();
-      const result = parseMizuhoCsv(buf);
+      const csvStart = parsed.range!.start;
+      const csvEnd = parsed.range!.end;
+      const defaultFrom = earliestRecord ?? csvStart;
+      // Clamp so default doesn't fall outside the CSV's actual range.
+      const clampedFrom = defaultFrom < csvStart ? csvStart : defaultFrom;
+      const defaultTo = csvEnd;
 
-      let rates = result.rates;
-      let dropped = 0;
-      if (earliest) {
-        const before = rates.length;
-        rates = rates.filter((r) => r.date >= earliest);
-        dropped = before - rates.length;
-      }
-
-      setParsed({
-        rates,
-        errors: result.errors,
-        range:
-          rates.length > 0
-            ? { start: rates[0].date, end: rates[rates.length - 1].date }
-            : undefined,
-      });
-      setFilterInfo({
-        totalParsed: result.rates.length,
-        droppedBeforeTrades: dropped,
-        earliestTradeDate: earliest,
-      });
-      if (rates.length === 0 && result.errors.length > 0) {
-        setStatus({ status: "error", message: result.errors[0] });
-      }
+      setInfo({ parsed, defaultFrom: clampedFrom, defaultTo });
+      setImportFrom(clampedFrom);
+      setImportTo(defaultTo);
     } catch (e) {
       setStatus({
         status: "error",
@@ -94,8 +121,26 @@ export function MizuhoSection({ skipExisting, onComplete }: Props) {
     }
   };
 
+  const filteredRates = useMemo(() => {
+    if (!info) return [];
+    return info.parsed.rates.filter((r) => {
+      if (importFrom && r.date < importFrom) return false;
+      if (importTo && r.date > importTo) return false;
+      return true;
+    });
+  }, [info, importFrom, importTo]);
+
+  const handleResetRange = () => {
+    if (!info) return;
+    setImportFrom(info.defaultFrom);
+    setImportTo(info.defaultTo);
+  };
+
   const handleSave = async () => {
-    if (!parsed || parsed.rates.length === 0) return;
+    if (filteredRates.length === 0) {
+      alert("取り込み期間内にレートがありません");
+      return;
+    }
     setStatus({ status: "running" });
 
     let existing = new Set<string>();
@@ -113,7 +158,7 @@ export function MizuhoSection({ skipExisting, onComplete }: Props) {
     let saved = 0;
     let skipped = 0;
     try {
-      for (const r of parsed.rates) {
+      for (const r of filteredRates) {
         if (existing.has(r.date)) {
           skipped++;
         } else {
@@ -123,8 +168,9 @@ export function MizuhoSection({ skipExisting, onComplete }: Props) {
       }
       setStatus({ status: "done", saved, skipped });
       setFile(null);
-      setParsed(null);
-      setFilterInfo(null);
+      setInfo(null);
+      setImportFrom("");
+      setImportTo("");
       await onComplete();
     } catch (e) {
       setStatus({
@@ -133,6 +179,13 @@ export function MizuhoSection({ skipExisting, onComplete }: Props) {
       });
     }
   };
+
+  const rangeChanged =
+    info != null &&
+    (importFrom !== info.defaultFrom || importTo !== info.defaultTo);
+  const droppedByRange = info
+    ? info.parsed.rates.length - filteredRates.length
+    : 0;
 
   return (
     <section
@@ -236,55 +289,99 @@ export function MizuhoSection({ skipExisting, onComplete }: Props) {
             )}
           </div>
         </li>
-        {parsed && parsed.rates.length > 0 && (
+        {info && (
           <li>
-            <strong>{parsed.rates.length.toLocaleString()} 件</strong>{" "}
-            のレートを保存対象に抽出
-            {parsed.range && (
-              <>
-                {" "}
-                ({parsed.range.start} 〜 {parsed.range.end})
-              </>
-            )}
-            {filterInfo &&
-              filterInfo.droppedBeforeTrades > 0 &&
-              filterInfo.earliestTradeDate && (
-                <div
-                  style={{
-                    fontSize: "0.82rem",
-                    color: COLORS.muted,
-                    marginTop: 2,
-                  }}
-                >
-                  元データ {filterInfo.totalParsed.toLocaleString()} 件 →
-                  取引最古日 ({filterInfo.earliestTradeDate}) 以降のみ採用、
-                  {filterInfo.droppedBeforeTrades.toLocaleString()} 件を
-                  除外してストレージを節約
-                </div>
-              )}
-            {filterInfo && !filterInfo.earliestTradeDate && (
-              <div
-                style={{
-                  fontSize: "0.82rem",
-                  color: COLORS.warn,
-                  marginTop: 2,
-                }}
-              >
-                ⚠ 取引データがまだ無いため全期間をインポートします。
-                Upload 後に再取り込みすると不要分が除外されます。
-              </div>
-            )}
-            {parsed.errors.length > 0 && (
+            CSV 全体: <strong>{info.parsed.rates.length.toLocaleString()}</strong>{" "}
+            件 ({info.parsed.range!.start} 〜 {info.parsed.range!.end})
+            {info.parsed.errors.length > 0 && (
               <span style={{ color: COLORS.warn, marginLeft: 6 }}>
-                (警告 {parsed.errors.length} 件)
+                (警告 {info.parsed.errors.length} 件)
               </span>
             )}
-            <div style={{ marginTop: 6 }}>
+            <div
+              style={{
+                fontSize: "0.82rem",
+                color: COLORS.muted,
+                marginTop: 2,
+              }}
+            >
+              既定の取り込み期間は{" "}
+              <strong style={{ color: COLORS.text }}>
+                {info.defaultFrom}
+              </strong>{" "}
+              〜{" "}
+              <strong style={{ color: COLORS.text }}>{info.defaultTo}</strong>
+              {" "}
+              (取引/Funding/入出金 の最古日 → quote.csv の最終日)。
+              下で調整できます。
+            </div>
+          </li>
+        )}
+        {info && (
+          <li>
+            取り込み期間:
+            <div
+              style={{
+                display: "flex",
+                gap: 12,
+                alignItems: "flex-end",
+                marginTop: 6,
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <label style={lbl}>From</label>
+                <input
+                  type="date"
+                  value={importFrom}
+                  onChange={(e) => setImportFrom(e.target.value)}
+                  style={input}
+                />
+              </div>
+              <div>
+                <label style={lbl}>To</label>
+                <input
+                  type="date"
+                  value={importTo}
+                  onChange={(e) => setImportTo(e.target.value)}
+                  style={input}
+                />
+              </div>
+              {rangeChanged && (
+                <button
+                  type="button"
+                  onClick={handleResetRange}
+                  style={btnGhost}
+                >
+                  既定値に戻す
+                </button>
+              )}
+            </div>
+            <div
+              style={{
+                fontSize: "0.85rem",
+                color: COLORS.muted,
+                marginTop: 8,
+              }}
+            >
+              <strong style={{ color: COLORS.text }}>
+                {filteredRates.length.toLocaleString()} 件
+              </strong>{" "}
+              を保存対象、
+              {droppedByRange.toLocaleString()} 件を期間外として除外
+            </div>
+            <div style={{ marginTop: 8 }}>
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={status.status === "running"}
-                style={status.status === "running" ? btnDisabled : btnPrimary}
+                disabled={
+                  status.status === "running" || filteredRates.length === 0
+                }
+                style={
+                  status.status === "running" || filteredRates.length === 0
+                    ? btnDisabled
+                    : btnPrimary
+                }
               >
                 {status.status === "running" ? "保存中..." : "保存"}
               </button>
