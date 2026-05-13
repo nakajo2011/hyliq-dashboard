@@ -1,8 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { pb } from "../lib/pb";
 import {
   fetchFrankfurterRange,
-  parseBulkFxInput,
   parseMizuhoCsv,
   upsertFxRate,
   type MizuhoParseResult,
@@ -25,24 +33,10 @@ export function Fx() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [singleDate, setSingleDate] = useState(
-    new Date().toISOString().slice(0, 10)
-  );
-  const [singleValue, setSingleValue] = useState("");
+  // ── 共通設定 ──────────────────────────────────────────────
+  const [skipExisting, setSkipExisting] = useState(true);
 
-  const [bulkText, setBulkText] = useState("");
-  const [bulkStatus, setBulkStatus] = useState<
-    | { status: "idle" }
-    | { status: "running" }
-    | {
-        status: "done";
-        added: number;
-        errors: { line: number; raw: string; message: string }[];
-      }
-    | { status: "error"; message: string }
-  >({ status: "idle" });
-
-  // ── みずほ CSV 取り込み state ────────────────────────────────────
+  // ── みずほ CSV 取り込み state ────────────────────────────────
   const [mizuhoFile, setMizuhoFile] = useState<File | null>(null);
   const [mizuhoParsed, setMizuhoParsed] = useState<MizuhoParseResult | null>(
     null
@@ -56,16 +50,9 @@ export function Fx() {
   const [mizuhoDrag, setMizuhoDrag] = useState(false);
   const mizuhoInputRef = useRef<HTMLInputElement>(null);
 
-  const [skipExisting, setSkipExisting] = useState(true);
+  // ── Frankfurter (ECB) state ────────────────────────────────
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
-
-  // ── 登録済みレート一覧のページネーション + フィルタ ────────────────
-  const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(50);
-  const [filterFrom, setFilterFrom] = useState("");
-  const [filterTo, setFilterTo] = useState("");
-  const [pageInfo, setPageInfo] = useState({ totalItems: 0, totalPages: 0 });
   const [apiStatus, setApiStatus] = useState<
     | { status: "idle" }
     | { status: "running" }
@@ -79,6 +66,10 @@ export function Fx() {
     | { status: "error"; message: string }
   >({ status: "idle" });
 
+  // ── 折れ線グラフ用フィルタ ─────────────────────────────────
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+
   const reload = async () => {
     setLoading(true);
     setError(null);
@@ -86,7 +77,6 @@ export function Fx() {
       const filterParts: string[] = [];
       if (filterFrom) filterParts.push(`date >= "${filterFrom} 00:00:00.000Z"`);
       if (filterTo) {
-        // Inclusive upper bound: use next day at 00:00 as the strict cap.
         const d = new Date(filterTo + "T00:00:00Z");
         d.setUTCDate(d.getUTCDate() + 1);
         const endExclusive = d.toISOString().slice(0, 10);
@@ -94,17 +84,10 @@ export function Fx() {
       }
       const filter = filterParts.join(" && ");
 
-      const res = await pb
+      const list = await pb
         .collection("fx_rates")
-        .getList<FxRow>(page, perPage, {
-          sort: "-date",
-          filter: filter || undefined,
-        });
-      setRows(res.items);
-      setPageInfo({
-        totalItems: res.totalItems,
-        totalPages: res.totalPages,
-      });
+        .getFullList<FxRow>({ sort: "+date", filter: filter || undefined });
+      setRows(list);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -112,52 +95,71 @@ export function Fx() {
     }
   };
 
-  // Reload whenever page / page size / filter changes.
   useEffect(() => {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, perPage, filterFrom, filterTo]);
+  }, [filterFrom, filterTo]);
 
-  const handleAddSingle = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const value = Number(singleValue);
-    if (!isFinite(value) || value <= 0) {
-      alert("レートが不正です");
-      return;
-    }
+  // ── みずほ CSV ハンドラ ──────────────────────────────────
+  const handleMizuhoFile = async (file: File) => {
+    setMizuhoFile(file);
+    setMizuhoParsed(null);
+    setMizuhoStatus({ status: "idle" });
     try {
-      await upsertFxRate(singleDate, value);
-      setSingleValue("");
-      await reload();
-    } catch (e) {
-      alert(`保存失敗: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
-
-  const handleBulk = async () => {
-    const { rates, errors } = parseBulkFxInput(bulkText);
-    if (rates.length === 0 && errors.length === 0) {
-      alert("ペースト内容が空です");
-      return;
-    }
-    setBulkStatus({ status: "running" });
-    let added = 0;
-    try {
-      for (const r of rates) {
-        await upsertFxRate(r.date, r.usd_jpy);
-        added++;
+      const buf = await file.arrayBuffer();
+      const parsed = parseMizuhoCsv(buf);
+      setMizuhoParsed(parsed);
+      if (parsed.rates.length === 0 && parsed.errors.length > 0) {
+        setMizuhoStatus({ status: "error", message: parsed.errors[0] });
       }
-      setBulkText("");
-      setBulkStatus({ status: "done", added, errors });
-      await reload();
     } catch (e) {
-      setBulkStatus({
+      setMizuhoStatus({
         status: "error",
         message: e instanceof Error ? e.message : String(e),
       });
     }
   };
 
+  const handleMizuhoSave = async () => {
+    if (!mizuhoParsed || mizuhoParsed.rates.length === 0) return;
+    setMizuhoStatus({ status: "running" });
+
+    let existing = new Set<string>();
+    if (skipExisting) {
+      try {
+        const list = await pb
+          .collection("fx_rates")
+          .getFullList<{ date: string }>({ fields: "date" });
+        existing = new Set(list.map((r) => dateOnly(r.date)));
+      } catch {
+        // proceed without skip set
+      }
+    }
+
+    let saved = 0;
+    let skipped = 0;
+    try {
+      for (const r of mizuhoParsed.rates) {
+        if (existing.has(r.date)) {
+          skipped++;
+        } else {
+          await upsertFxRate(r.date, r.usd_jpy);
+          saved++;
+        }
+      }
+      setMizuhoStatus({ status: "done", saved, skipped });
+      setMizuhoFile(null);
+      setMizuhoParsed(null);
+      await reload();
+    } catch (e) {
+      setMizuhoStatus({
+        status: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
+  // ── Frankfurter ハンドラ ──────────────────────────────────
   const apiFetchAndStore = async (from: string, to: string) => {
     setApiStatus({ status: "running" });
     try {
@@ -226,83 +228,37 @@ export function Fx() {
     await apiFetchAndStore(rangeFrom, rangeTo);
   };
 
-  const handleMizuhoFile = async (file: File) => {
-    setMizuhoFile(file);
-    setMizuhoParsed(null);
-    setMizuhoStatus({ status: "idle" });
-    try {
-      const buf = await file.arrayBuffer();
-      const parsed = parseMizuhoCsv(buf);
-      setMizuhoParsed(parsed);
-      if (parsed.rates.length === 0 && parsed.errors.length > 0) {
-        setMizuhoStatus({ status: "error", message: parsed.errors[0] });
-      }
-    } catch (e) {
-      setMizuhoStatus({
-        status: "error",
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  };
+  // ── 折れ線グラフ用データ ─────────────────────────────────
+  const chartData = useMemo(
+    () =>
+      rows.map((r) => ({
+        date: dateOnly(r.date),
+        usd_jpy: r.usd_jpy,
+      })),
+    [rows]
+  );
 
-  const handleMizuhoSave = async () => {
-    if (!mizuhoParsed || mizuhoParsed.rates.length === 0) return;
-    setMizuhoStatus({ status: "running" });
-
-    let existing = new Set<string>();
-    if (skipExisting) {
-      try {
-        const list = await pb
-          .collection("fx_rates")
-          .getFullList<{ date: string }>({ fields: "date" });
-        existing = new Set(list.map((r) => dateOnly(r.date)));
-      } catch {
-        // proceed without skip set
-      }
-    }
-
-    let saved = 0;
-    let skipped = 0;
-    try {
-      for (const r of mizuhoParsed.rates) {
-        if (existing.has(r.date)) {
-          skipped++;
-        } else {
-          await upsertFxRate(r.date, r.usd_jpy);
-          saved++;
-        }
-      }
-      setMizuhoStatus({ status: "done", saved, skipped });
-      setMizuhoFile(null);
-      setMizuhoParsed(null);
-      await reload();
-    } catch (e) {
-      setMizuhoStatus({
-        status: "error",
-        message: e instanceof Error ? e.message : String(e),
-      });
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!window.confirm("このレートを削除しますか？")) return;
-    try {
-      await pb.collection("fx_rates").delete(id);
-      await reload();
-    } catch (e) {
-      alert(`削除失敗: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
+  const stats = useMemo(() => {
+    if (rows.length === 0) return null;
+    const values = rows.map((r) => r.usd_jpy);
+    return {
+      count: rows.length,
+      min: Math.min(...values),
+      max: Math.max(...values),
+      first: rows[0],
+      last: rows[rows.length - 1],
+    };
+  }, [rows]);
 
   return (
     <div>
       <h1 style={{ marginTop: 0 }}>FX レート (USD/JPY)</h1>
       <p style={{ color: "#888" }}>
-        確定申告レポートの JPY 換算に使う為替レートを日付別に登録します。
+        確定申告レポートの JPY 換算に使う為替レートを登録します。
         該当日が無い場合は直近過去のレートが自動的に使われます (carry-forward)。
       </p>
 
-      {/* 共通設定: 以下の全ての取り込み方法に共通で適用される */}
+      {/* 共通設定 (各取り込みに共通で効く) */}
       <div
         style={{
           display: "flex",
@@ -313,6 +269,7 @@ export function Fx() {
           background: "#1c2030",
           border: "1px solid #2a3047",
           borderRadius: 8,
+          flexWrap: "wrap",
         }}
       >
         <span
@@ -341,10 +298,11 @@ export function Fx() {
           既存レートを上書きしない
         </label>
         <span style={{ fontSize: "0.8rem", color: "#666" }}>
-          (みずほ / Frankfurter / 複数行ペースト すべての取り込みに適用)
+          (みずほ / Frankfurter 両方の取り込みに適用)
         </span>
       </div>
 
+      {/* みずほ CSV 取り込み (推奨) */}
       <section
         style={{
           ...section,
@@ -359,15 +317,16 @@ export function Fx() {
           </span>
         </h2>
         <p style={{ color: "#aab", fontSize: "0.85rem", marginTop: 0 }}>
-          みずほ銀行が公開している{" "}
-          <code>quote.csv</code>{" "}
-          には 2002 年以降の日次 TTM (公示仲値) が 1 ファイルにまとまっています。
-          国税庁が認める銀行公示レートで、確定申告で最も使われる標準値です。
+          みずほ銀行が公開している <code>quote.csv</code> には 2002 年以降の
+          日次 TTM (公示仲値) が 1 ファイルにまとまっています。国税庁が認める
+          銀行公示レートで、確定申告で最も使われる標準値です。
           ブラウザでダウンロードしてから下にアップロードしてください
           (スクレイプは行いません)。
         </p>
 
-        <ol style={{ paddingLeft: "1.2rem", margin: "0.8rem 0", lineHeight: 1.7 }}>
+        <ol
+          style={{ paddingLeft: "1.2rem", margin: "0.8rem 0", lineHeight: 1.7 }}
+        >
           <li>
             <a
               href="https://www.mizuhobank.co.jp/market/quote.csv"
@@ -470,7 +429,13 @@ export function Fx() {
                 >
                   {mizuhoStatus.status === "running" ? "保存中..." : "保存"}
                 </button>
-                <span style={{ marginLeft: 12, fontSize: "0.85rem", color: "#aab" }}>
+                <span
+                  style={{
+                    marginLeft: 12,
+                    fontSize: "0.85rem",
+                    color: "#aab",
+                  }}
+                >
                   ↑ ページ上部の「共通設定」が適用されます
                 </span>
               </div>
@@ -490,12 +455,14 @@ export function Fx() {
         )}
       </section>
 
+      {/* Frankfurter (ECB) */}
       <section style={section}>
         <h2 style={h2}>API から取得 (Frankfurter / ECB)</h2>
         <p style={{ color: "#888", fontSize: "0.85rem", marginTop: 0 }}>
-          Frankfurter API (ECB が公開する日次レート、無料・API キー不要) から USD/JPY を一括取得します。
-          週末・祝日は ECB が公開しないため欠落しますが、後段の carry-forward で吸収されます。
-          確定申告では原則 銀行公示 TTM レートですが、ECB ベースは実務上の目安として広く使われています。
+          Frankfurter API (ECB の日次レート、無料・API キー不要) から
+          USD/JPY を一括取得します。週末・祝日は欠落しますが、
+          carry-forward で吸収されます。MUFG TTM とは数値が微妙に異なる
+          (通常 0.1〜0.5 円差) ため、確定申告本番には みずほ CSV を推奨します。
         </p>
 
         <div
@@ -516,7 +483,7 @@ export function Fx() {
             {apiStatus.status === "running" ? "取得中..." : "取引日の全範囲を取得"}
           </button>
           <span style={{ color: "#666", fontSize: "0.85rem" }}>
-            ← 取引データの最古日〜最新日まで一括取得 (推奨)
+            ← 取引データの最古日〜最新日まで一括取得
           </span>
         </div>
 
@@ -563,135 +530,31 @@ export function Fx() {
         </div>
 
         {apiStatus.status === "done" && (
-          <p
-            style={{
-              color: "#5dd58c",
-              marginTop: "0.8rem",
-              fontSize: "0.9rem",
-            }}
-          >
+          <p style={{ color: "#5dd58c", marginTop: "0.8rem", fontSize: "0.9rem" }}>
             ✅ {apiStatus.range}: API から {apiStatus.fetched} 件取得 → 新規{" "}
             {apiStatus.saved} 件、スキップ {apiStatus.skipped} 件
           </p>
         )}
         {apiStatus.status === "error" && (
-          <p
-            style={{
-              color: "#ff6b6b",
-              marginTop: "0.8rem",
-              fontSize: "0.9rem",
-            }}
-          >
+          <p style={{ color: "#ff6b6b", marginTop: "0.8rem", fontSize: "0.9rem" }}>
             ❌ {apiStatus.message}
           </p>
         )}
       </section>
 
-      <section style={section}>
-        <h2 style={h2}>レートを 1 件追加</h2>
-        <form
-          onSubmit={handleAddSingle}
-          style={{
-            display: "flex",
-            gap: "0.6rem",
-            alignItems: "flex-end",
-            flexWrap: "wrap",
-          }}
-        >
-          <div>
-            <label style={lbl}>日付</label>
-            <input
-              type="date"
-              value={singleDate}
-              onChange={(e) => setSingleDate(e.target.value)}
-              required
-              style={input}
-            />
-          </div>
-          <div>
-            <label style={lbl}>USD/JPY</label>
-            <input
-              type="number"
-              step="0.001"
-              min="0.001"
-              value={singleValue}
-              onChange={(e) => setSingleValue(e.target.value)}
-              placeholder="150.500"
-              required
-              style={{ ...input, width: 140 }}
-            />
-          </div>
-          <button type="submit" style={btnPrimary}>
-            追加 / 上書き
-          </button>
-        </form>
-      </section>
-
-      <section style={section}>
-        <h2 style={h2}>複数行ペースト</h2>
-        <p style={{ color: "#888", fontSize: "0.85rem", marginTop: 0 }}>
-          1 行 1 レート。"YYYY-MM-DD 150.50" のように、スペース / タブ /
-          カンマ区切り、"/" / "-" どちらの日付形式でも OK。同じ日付があれば上書き。
-        </p>
-        <textarea
-          value={bulkText}
-          onChange={(e) => setBulkText(e.target.value)}
-          rows={6}
-          placeholder={"2026-04-02 150.50\n2026-04-03 150.30\n2026-04-04,150.10"}
-          style={{ ...input, width: "100%", fontFamily: "monospace" }}
-        />
-        <div style={{ marginTop: "0.6rem" }}>
-          <button
-            type="button"
-            onClick={handleBulk}
-            disabled={bulkStatus.status === "running" || !bulkText.trim()}
-            style={
-              bulkStatus.status === "running" || !bulkText.trim()
-                ? btnDisabled
-                : btnPrimary
-            }
-          >
-            {bulkStatus.status === "running" ? "登録中..." : "一括登録"}
-          </button>
-        </div>
-        {bulkStatus.status === "done" && (
-          <div style={{ marginTop: "0.6rem", fontSize: "0.9rem" }}>
-            <span style={{ color: "#5dd58c" }}>
-              ✅ {bulkStatus.added} 件を保存
-            </span>
-            {bulkStatus.errors.length > 0 && (
-              <details style={{ marginTop: 4 }}>
-                <summary style={{ color: "#ff8c8c", cursor: "pointer" }}>
-                  パースできなかった行 ({bulkStatus.errors.length} 件)
-                </summary>
-                <ul
-                  style={{
-                    fontFamily: "monospace",
-                    fontSize: "0.8rem",
-                    color: "#ffb3b3",
-                  }}
-                >
-                  {bulkStatus.errors.map((er) => (
-                    <li key={er.line}>
-                      L{er.line}: {er.raw} — {er.message}
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            )}
-          </div>
-        )}
-        {bulkStatus.status === "error" && (
-          <p style={{ color: "#ff6b6b" }}>❌ {bulkStatus.message}</p>
-        )}
-      </section>
-
+      {/* 登録済みレートの折れ線グラフ */}
       <section style={section}>
         <h2 style={h2}>
-          登録済みレート ({pageInfo.totalItems.toLocaleString()} 件)
+          登録済みレートの推移{" "}
+          {stats && (
+            <span style={{ color: "#666", fontWeight: 400, fontSize: "0.85rem" }}>
+              ({stats.count.toLocaleString()} 件、{dateOnly(stats.first.date)}{" "}
+              〜 {dateOnly(stats.last.date)})
+            </span>
+          )}
         </h2>
 
-        {/* フィルタ + ページサイズ */}
+        {/* 期間フィルタ */}
         <div
           style={{
             display: "flex",
@@ -706,10 +569,7 @@ export function Fx() {
             <input
               type="date"
               value={filterFrom}
-              onChange={(e) => {
-                setFilterFrom(e.target.value);
-                setPage(1);
-              }}
+              onChange={(e) => setFilterFrom(e.target.value)}
               style={input}
             />
           </div>
@@ -718,10 +578,7 @@ export function Fx() {
             <input
               type="date"
               value={filterTo}
-              onChange={(e) => {
-                setFilterTo(e.target.value);
-                setPage(1);
-              }}
+              onChange={(e) => setFilterTo(e.target.value)}
               style={input}
             />
           </div>
@@ -731,128 +588,85 @@ export function Fx() {
               onClick={() => {
                 setFilterFrom("");
                 setFilterTo("");
-                setPage(1);
               }}
               style={btnGhost}
             >
               フィルタクリア
             </button>
           )}
-          <div style={{ marginLeft: "auto" }}>
-            <label style={lbl}>表示件数</label>
-            <select
-              value={perPage}
-              onChange={(e) => {
-                setPerPage(Number(e.target.value));
-                setPage(1);
-              }}
-              style={input}
-            >
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={200}>200</option>
-            </select>
-          </div>
         </div>
 
         {loading && <p>読み込み中...</p>}
         {error && <p style={{ color: "#ff6b6b" }}>❌ {error}</p>}
-        {!loading && !error && pageInfo.totalItems === 0 && (
+
+        {!loading && !error && rows.length === 0 && (
           <p style={{ color: "#888" }}>
             {filterFrom || filterTo
               ? "この期間にレートはありません"
-              : "まだレートがありません"}
+              : "まだレートがありません。上のセクションから取り込んでください。"}
           </p>
         )}
-        {!loading && rows.length > 0 && (
-          <>
-            <table style={table}>
-              <thead>
-                <tr style={trHead}>
-                  <th style={th}>日付</th>
-                  <th style={{ ...th, textAlign: "right" }}>USD/JPY</th>
-                  <th style={th}>登録元</th>
-                  <th style={th}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => (
-                  <tr key={r.id} style={trRow}>
-                    <td style={td}>{dateOnly(r.date)}</td>
-                    <td style={tdRight}>{r.usd_jpy.toFixed(3)}</td>
-                    <td style={{ ...td, color: "#888" }}>{r.source || "-"}</td>
-                    <td style={{ ...td, textAlign: "right" }}>
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(r.id)}
-                        style={btnDanger}
-                      >
-                        削除
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
 
-            {/* ページネーション */}
+        {!loading && rows.length > 0 && stats && (
+          <>
+            <ResponsiveContainer width="100%" height={320}>
+              <LineChart data={chartData}>
+                <CartesianGrid stroke="#222838" strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="date"
+                  stroke="#888"
+                  fontSize={12}
+                  minTickGap={40}
+                />
+                <YAxis
+                  stroke="#888"
+                  fontSize={12}
+                  domain={["auto", "auto"]}
+                  tickFormatter={(v) =>
+                    typeof v === "number" ? v.toFixed(1) : String(v)
+                  }
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "#141823",
+                    border: "1px solid #2a3047",
+                  }}
+                  labelStyle={{ color: "#aab" }}
+                  formatter={(v) =>
+                    typeof v === "number" ? v.toFixed(3) : String(v)
+                  }
+                />
+                <Line
+                  type="monotone"
+                  dataKey="usd_jpy"
+                  stroke="#6cf"
+                  dot={false}
+                  strokeWidth={1.5}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+
             <div
               style={{
                 display: "flex",
-                alignItems: "center",
-                gap: 10,
-                marginTop: "0.8rem",
-                fontSize: "0.88rem",
+                gap: "1.5rem",
+                marginTop: "0.6rem",
+                fontSize: "0.85rem",
                 color: "#aab",
+                flexWrap: "wrap",
               }}
             >
               <span>
-                {(page - 1) * perPage + 1} 〜{" "}
-                {Math.min(page * perPage, pageInfo.totalItems)} /{" "}
-                {pageInfo.totalItems.toLocaleString()} 件
+                最新: <strong style={{ color: "#e6e6e6" }}>
+                  {dateOnly(stats.last.date)} = {stats.last.usd_jpy.toFixed(3)}
+                </strong>
               </span>
-              <span style={{ marginLeft: "auto" }}>
-                ページ {page} / {pageInfo.totalPages}
+              <span>
+                Min: <strong style={{ color: "#aab" }}>{stats.min.toFixed(3)}</strong>
               </span>
-              <button
-                type="button"
-                onClick={() => setPage(1)}
-                disabled={page <= 1}
-                style={page <= 1 ? btnGhostDisabled : btnGhost}
-              >
-                ≪
-              </button>
-              <button
-                type="button"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page <= 1}
-                style={page <= 1 ? btnGhostDisabled : btnGhost}
-              >
-                前へ
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setPage((p) => Math.min(pageInfo.totalPages, p + 1))
-                }
-                disabled={page >= pageInfo.totalPages}
-                style={
-                  page >= pageInfo.totalPages ? btnGhostDisabled : btnGhost
-                }
-              >
-                次へ
-              </button>
-              <button
-                type="button"
-                onClick={() => setPage(pageInfo.totalPages)}
-                disabled={page >= pageInfo.totalPages}
-                style={
-                  page >= pageInfo.totalPages ? btnGhostDisabled : btnGhost
-                }
-              >
-                ≫
-              </button>
+              <span>
+                Max: <strong style={{ color: "#aab" }}>{stats.max.toFixed(3)}</strong>
+              </span>
             </div>
           </>
         )}
@@ -901,14 +715,6 @@ const btnDisabled: React.CSSProperties = {
   color: "#666",
   cursor: "not-allowed",
 };
-const btnDanger: React.CSSProperties = {
-  background: "transparent",
-  color: "#ff8c8c",
-  border: "1px solid #6b2a2a",
-  borderRadius: 6,
-  padding: "0.3rem 0.7rem",
-  cursor: "pointer",
-};
 const btnGhost: React.CSSProperties = {
   background: "transparent",
   color: "#aab",
@@ -916,36 +722,4 @@ const btnGhost: React.CSSProperties = {
   borderRadius: 6,
   padding: "0.3rem 0.7rem",
   cursor: "pointer",
-};
-const btnGhostDisabled: React.CSSProperties = {
-  ...btnGhost,
-  color: "#555",
-  cursor: "not-allowed",
-};
-const table: React.CSSProperties = {
-  width: "100%",
-  borderCollapse: "collapse",
-  fontSize: "0.9rem",
-};
-const trHead: React.CSSProperties = {
-  borderBottom: "1px solid #2a3047",
-  color: "#aab",
-};
-const trRow: React.CSSProperties = { borderBottom: "1px solid #1a1f2c" };
-const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: "0.55rem 0.6rem",
-  fontWeight: 500,
-  fontSize: "0.78rem",
-  textTransform: "uppercase",
-  letterSpacing: 0.5,
-};
-const td: React.CSSProperties = {
-  padding: "0.5rem 0.6rem",
-  verticalAlign: "middle",
-};
-const tdRight: React.CSSProperties = {
-  ...td,
-  textAlign: "right",
-  fontVariantNumeric: "tabular-nums",
 };
