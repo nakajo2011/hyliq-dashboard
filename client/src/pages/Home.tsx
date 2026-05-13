@@ -18,8 +18,6 @@ import {
   buildCoinPnL,
   buildDailyPnL,
   convertTradesToJpy,
-  CONVERSION_METHOD_LABEL,
-  type ConversionMethod,
 } from "../lib/pnl";
 import type {
   FundingLike,
@@ -163,10 +161,9 @@ function EmptyState() {
  */
 function jpyConvertedTrades<T extends TradeRow>(
   trades: T[],
-  fxRates: FxRate[],
-  method: ConversionMethod
+  fxRates: FxRate[]
 ): { trades: T[]; missing: number } {
-  const result = convertTradesToJpy(trades, fxRates, method);
+  const result = convertTradesToJpy(trades, fxRates);
   const kept: T[] = [];
   for (let i = 0; i < result.trades.length; i++) {
     const c = result.trades[i];
@@ -185,20 +182,15 @@ function Dashboard({
   const { accounts, trades, fundings, transfers, fxRates } = state;
 
   const [currency, setCurrency] = useState<Currency>("USD");
-  const [method, setMethod] = useState<ConversionMethod>("daily");
 
-  // Convert (or pass through) the trades based on the selected mode.
+  // Convert (or pass through) the trades based on the selected currency.
   const { displayedTrades, missingCount } = useMemo(() => {
     if (currency === "USD") {
       return { displayedTrades: trades, missingCount: 0 };
     }
-    const { trades: kept, missing } = jpyConvertedTrades(
-      trades,
-      fxRates,
-      method
-    );
+    const { trades: kept, missing } = jpyConvertedTrades(trades, fxRates);
     return { displayedTrades: kept, missingCount: missing };
-  }, [currency, method, trades, fxRates]);
+  }, [currency, trades, fxRates]);
 
   const stats = useMemo(
     () => buildAccountStats(displayedTrades, fundings, transfers),
@@ -230,12 +222,7 @@ function Dashboard({
             </Link>
           </p>
         </div>
-        <DisplayControls
-          currency={currency}
-          method={method}
-          onChangeCurrency={setCurrency}
-          onChangeMethod={setMethod}
-        />
+        <CurrencyToggle currency={currency} onChange={setCurrency} />
       </div>
 
       {currency === "JPY" && missingCount > 0 && (
@@ -261,8 +248,7 @@ function Dashboard({
 
       <section style={{ marginTop: "1.8rem" }}>
         <h2 style={sectionTitle}>
-          累積実現 PnL (全アカウント合算, {currencyLabel}
-          {currency === "JPY" && ` / ${CONVERSION_METHOD_LABEL[method]}`})
+          累積実現 PnL (全アカウント合算, {currencyLabel})
         </h2>
         {daily.length === 0 ? (
           <p style={{ color: "#666" }}>取引データがありません</p>
@@ -337,65 +323,16 @@ function Dashboard({
   );
 }
 
-function DisplayControls({
+function CurrencyToggle({
   currency,
-  method,
-  onChangeCurrency,
-  onChangeMethod,
-}: {
-  currency: Currency;
-  method: ConversionMethod;
-  onChangeCurrency: (c: Currency) => void;
-  onChangeMethod: (m: ConversionMethod) => void;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        gap: "0.8rem",
-        alignItems: "center",
-        flexWrap: "wrap",
-      }}
-    >
-      <ToggleGroup
-        label="通貨"
-        options={[
-          { value: "USD", label: "USD" },
-          { value: "JPY", label: "JPY" },
-        ]}
-        value={currency}
-        onChange={(v) => onChangeCurrency(v as Currency)}
-      />
-      {currency === "JPY" && (
-        <ToggleGroup
-          label="換算方法"
-          options={[
-            { value: "daily", label: "日次" },
-            { value: "total-average", label: "総平均法" },
-            { value: "moving-average", label: "移動平均法" },
-          ]}
-          value={method}
-          onChange={(v) => onChangeMethod(v as ConversionMethod)}
-        />
-      )}
-    </div>
-  );
-}
-
-function ToggleGroup({
-  label,
-  options,
-  value,
   onChange,
 }: {
-  label: string;
-  options: { value: string; label: string }[];
-  value: string;
-  onChange: (v: string) => void;
+  currency: Currency;
+  onChange: (c: Currency) => void;
 }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-      <span style={{ color: "#888", fontSize: "0.78rem" }}>{label}</span>
+      <span style={{ color: "#888", fontSize: "0.78rem" }}>表示通貨</span>
       <div
         style={{
           display: "inline-flex",
@@ -405,22 +342,22 @@ function ToggleGroup({
           padding: 2,
         }}
       >
-        {options.map((opt) => (
+        {(["USD", "JPY"] as const).map((opt) => (
           <button
-            key={opt.value}
+            key={opt}
             type="button"
-            onClick={() => onChange(opt.value)}
+            onClick={() => onChange(opt)}
             style={{
-              background: value === opt.value ? "#2563eb" : "transparent",
-              color: value === opt.value ? "#fff" : "#aab",
+              background: currency === opt ? "#2563eb" : "transparent",
+              color: currency === opt ? "#fff" : "#aab",
               border: "none",
               borderRadius: 4,
-              padding: "0.25rem 0.65rem",
+              padding: "0.25rem 0.7rem",
               fontSize: "0.82rem",
               cursor: "pointer",
             }}
           >
-            {opt.label}
+            {opt}
           </button>
         ))}
       </div>
