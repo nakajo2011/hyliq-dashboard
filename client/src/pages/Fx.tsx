@@ -41,6 +41,12 @@ export function Fx() {
   const [mizuhoParsed, setMizuhoParsed] = useState<MizuhoParseResult | null>(
     null
   );
+  /** Counts before / after the "trade-date filter" applied to a parsed file. */
+  const [mizuhoFilter, setMizuhoFilter] = useState<{
+    totalParsed: number;
+    droppedBeforeTrades: number;
+    earliestTradeDate: string | null;
+  } | null>(null);
   const [mizuhoStatus, setMizuhoStatus] = useState<
     | { status: "idle" }
     | { status: "running" }
@@ -69,6 +75,7 @@ export function Fx() {
   // ── 折れ線グラフ用フィルタ ─────────────────────────────────
   const [filterFrom, setFilterFrom] = useState("");
   const [filterTo, setFilterTo] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   const reload = async () => {
     setLoading(true);
@@ -104,12 +111,52 @@ export function Fx() {
   const handleMizuhoFile = async (file: File) => {
     setMizuhoFile(file);
     setMizuhoParsed(null);
+    setMizuhoFilter(null);
     setMizuhoStatus({ status: "idle" });
     try {
+      // Look up the earliest trade date (JST) so we can skip pre-trade rates
+      // and not bloat the DB with decades of unused history.
+      let earliest: string | null = null;
+      try {
+        const first = await pb
+          .collection("trades")
+          .getList<{ time: string }>(1, 1, {
+            sort: "+time",
+            fields: "time",
+          });
+        if (first.items.length > 0) {
+          earliest = dateKeyJst(first.items[0].time);
+        }
+      } catch {
+        // ignore — if we can't look up trades, fall back to importing all
+      }
+
       const buf = await file.arrayBuffer();
       const parsed = parseMizuhoCsv(buf);
-      setMizuhoParsed(parsed);
-      if (parsed.rates.length === 0 && parsed.errors.length > 0) {
+
+      let rates = parsed.rates;
+      let dropped = 0;
+      if (earliest) {
+        const before = rates.length;
+        rates = rates.filter((r) => r.date >= earliest);
+        dropped = before - rates.length;
+      }
+
+      setMizuhoParsed({
+        rates,
+        errors: parsed.errors,
+        range:
+          rates.length > 0
+            ? { start: rates[0].date, end: rates[rates.length - 1].date }
+            : undefined,
+      });
+      setMizuhoFilter({
+        totalParsed: parsed.rates.length,
+        droppedBeforeTrades: dropped,
+        earliestTradeDate: earliest,
+      });
+
+      if (rates.length === 0 && parsed.errors.length > 0) {
         setMizuhoStatus({ status: "error", message: parsed.errors[0] });
       }
     } catch (e) {
@@ -150,6 +197,7 @@ export function Fx() {
       setMizuhoStatus({ status: "done", saved, skipped });
       setMizuhoFile(null);
       setMizuhoParsed(null);
+      setMizuhoFilter(null);
       await reload();
     } catch (e) {
       setMizuhoStatus({
@@ -226,6 +274,47 @@ export function Fx() {
       return;
     }
     await apiFetchAndStore(rangeFrom, rangeTo);
+  };
+
+  // ── 全削除 ─────────────────────────────────────────────
+  const handleDeleteAll = async () => {
+    if (deleting) return;
+    // First confirmation
+    const list = await pb
+      .collection("fx_rates")
+      .getFullList<{ id: string }>({ fields: "id" });
+    const count = list.length;
+    if (count === 0) {
+      alert("削除するレートがありません");
+      return;
+    }
+    if (
+      !window.confirm(
+        `本当に全 ${count.toLocaleString()} 件の FX レートを削除しますか？\n` +
+          "元に戻せません (確定申告レポートが全件「未登録」になります)。"
+      )
+    ) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      // 20 並列ずつ削除 (5,500 件で約 30 秒)
+      const CHUNK = 20;
+      for (let i = 0; i < list.length; i += CHUNK) {
+        const chunk = list.slice(i, i + CHUNK);
+        await Promise.all(
+          chunk.map((r) => pb.collection("fx_rates").delete(r.id))
+        );
+      }
+      await reload();
+    } catch (e) {
+      alert(
+        "削除中にエラーが発生しました: " +
+          (e instanceof Error ? e.message : String(e))
+      );
+    } finally {
+      setDeleting(false);
+    }
   };
 
   // ── 折れ線グラフ用データ ─────────────────────────────────
@@ -406,12 +495,41 @@ export function Fx() {
           </li>
           {mizuhoParsed && mizuhoParsed.rates.length > 0 && (
             <li>
-              <strong>{mizuhoParsed.rates.length} 件</strong> のレートを抽出
+              <strong>{mizuhoParsed.rates.length.toLocaleString()} 件</strong>{" "}
+              のレートを保存対象に抽出
               {mizuhoParsed.range && (
                 <>
                   {" "}
                   ({mizuhoParsed.range.start} 〜 {mizuhoParsed.range.end})
                 </>
+              )}
+              {mizuhoFilter &&
+                mizuhoFilter.droppedBeforeTrades > 0 &&
+                mizuhoFilter.earliestTradeDate && (
+                  <div
+                    style={{
+                      fontSize: "0.82rem",
+                      color: "#aab",
+                      marginTop: 2,
+                    }}
+                  >
+                    元データ {mizuhoFilter.totalParsed.toLocaleString()} 件 →
+                    取引最古日 ({mizuhoFilter.earliestTradeDate}) 以降のみ採用、
+                    {mizuhoFilter.droppedBeforeTrades.toLocaleString()} 件を
+                    除外してストレージを節約
+                  </div>
+                )}
+              {mizuhoFilter && !mizuhoFilter.earliestTradeDate && (
+                <div
+                  style={{
+                    fontSize: "0.82rem",
+                    color: "#f5d678",
+                    marginTop: 2,
+                  }}
+                >
+                  ⚠ 取引データがまだ無いため全期間をインポートします。
+                  Upload 後に再取り込みすると不要分が除外されます。
+                </div>
               )}
               {mizuhoParsed.errors.length > 0 && (
                 <span style={{ color: "#f5d678", marginLeft: 6 }}>
@@ -544,15 +662,38 @@ export function Fx() {
 
       {/* 登録済みレートの折れ線グラフ */}
       <section style={section}>
-        <h2 style={h2}>
-          登録済みレートの推移{" "}
-          {stats && (
-            <span style={{ color: "#666", fontWeight: 400, fontSize: "0.85rem" }}>
-              ({stats.count.toLocaleString()} 件、{dateOnly(stats.first.date)}{" "}
-              〜 {dateOnly(stats.last.date)})
-            </span>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <h2 style={{ ...h2, marginBottom: 0 }}>
+            登録済みレートの推移{" "}
+            {stats && (
+              <span
+                style={{ color: "#666", fontWeight: 400, fontSize: "0.85rem" }}
+              >
+                ({stats.count.toLocaleString()} 件、
+                {dateOnly(stats.first.date)} 〜 {dateOnly(stats.last.date)})
+              </span>
+            )}
+          </h2>
+          {stats && stats.count > 0 && (
+            <button
+              type="button"
+              onClick={handleDeleteAll}
+              disabled={deleting}
+              style={deleting ? btnDangerDisabled : btnDanger}
+              title="登録されている FX レートをすべて削除"
+            >
+              {deleting ? "削除中..." : "🗑 全削除"}
+            </button>
           )}
-        </h2>
+        </div>
 
         {/* 期間フィルタ */}
         <div
@@ -722,4 +863,18 @@ const btnGhost: React.CSSProperties = {
   borderRadius: 6,
   padding: "0.3rem 0.7rem",
   cursor: "pointer",
+};
+const btnDanger: React.CSSProperties = {
+  background: "transparent",
+  color: "#ff8c8c",
+  border: "1px solid #6b2a2a",
+  borderRadius: 6,
+  padding: "0.4rem 0.8rem",
+  cursor: "pointer",
+  fontSize: "0.9rem",
+};
+const btnDangerDisabled: React.CSSProperties = {
+  ...btnDanger,
+  color: "#555",
+  cursor: "not-allowed",
 };
