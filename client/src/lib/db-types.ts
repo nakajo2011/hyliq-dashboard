@@ -56,6 +56,12 @@ export interface TransferRecord {
   fee: number;
   currency: string;
   hash: string;
+  /**
+   * Whether this transfer should be included in 確定申告 as taxable income.
+   * Most deposits are self-transfers (not taxable); set to true only for
+   * actual income (e.g., payment received, gift, sale proceeds).
+   */
+  taxable: boolean;
   created: string;
   updated: string;
 }

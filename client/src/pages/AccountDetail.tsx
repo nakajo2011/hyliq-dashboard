@@ -38,7 +38,7 @@ interface AccountRecord {
 
 type TradeRow = TradeLike & { id: string; ntl: number };
 type FundingRow = FundingLike & { id: string; sz: number; side: string };
-type TransferRow = TransferLike & { id: string };
+type TransferRow = TransferLike & { id: string; taxable: boolean };
 
 type LoadState =
   | { status: "loading" }
@@ -103,7 +103,27 @@ export function AccountDetail() {
   if (state.status === "error")
     return <p style={{ color: "#ff6b6b" }}>❌ {state.message}</p>;
 
-  return <AccountDetailReady {...state} />;
+  const onUpdateTransfer = async (transferId: string, taxable: boolean) => {
+    try {
+      await pb.collection("transfers").update(transferId, { taxable });
+    } catch (e) {
+      alert(
+        "更新失敗: " + (e instanceof Error ? e.message : String(e))
+      );
+      return;
+    }
+    setState((prev) => {
+      if (prev.status !== "ready") return prev;
+      return {
+        ...prev,
+        transfers: prev.transfers.map((t) =>
+          t.id === transferId ? { ...t, taxable } : t
+        ),
+      };
+    });
+  };
+
+  return <AccountDetailReady {...state} onUpdateTransfer={onUpdateTransfer} />;
 }
 
 interface ReadyProps {
@@ -111,6 +131,7 @@ interface ReadyProps {
   trades: TradeRow[];
   fundings: FundingRow[];
   transfers: TransferRow[];
+  onUpdateTransfer: (transferId: string, taxable: boolean) => Promise<void>;
 }
 
 function AccountDetailReady({
@@ -118,6 +139,7 @@ function AccountDetailReady({
   trades,
   fundings,
   transfers,
+  onUpdateTransfer,
 }: ReadyProps) {
   const stats = useMemo(
     () => buildAccountStats(trades, fundings, transfers),
@@ -235,6 +257,21 @@ function AccountDetailReady({
           <Empty />
         ) : (
           <TradesTable trades={recentTrades} />
+        )}
+      </Section>
+
+      <Section
+        title={`入出金履歴 (${transfers.length} 件 / 課税対象 ${
+          transfers.filter((t) => t.taxable).length
+        } 件)`}
+      >
+        {transfers.length === 0 ? (
+          <Empty />
+        ) : (
+          <TransfersTable
+            transfers={transfers}
+            onUpdateTaxable={onUpdateTransfer}
+          />
         )}
       </Section>
     </div>
@@ -449,6 +486,74 @@ function TradesTable({ trades }: { trades: TradeRow[] }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+function TransfersTable({
+  transfers,
+  onUpdateTaxable,
+}: {
+  transfers: TransferRow[];
+  onUpdateTaxable: (id: string, taxable: boolean) => Promise<void>;
+}) {
+  const sorted = [...transfers].sort((a, b) => b.time.localeCompare(a.time));
+  return (
+    <>
+      <p
+        style={{
+          color: "#888",
+          fontSize: "0.82rem",
+          marginTop: 0,
+          marginBottom: 8,
+        }}
+      >
+        「課税対象」は確定申告でその他収入として計上したい入金 (自己送金以外 —
+        サービス対価・贈与・売却代金など) に印を付けてください。出金や
+        自己送金はチェック不要です。
+      </p>
+      <table style={table}>
+        <thead>
+          <tr style={trHead}>
+            <th style={th}>Time (JST)</th>
+            <th style={th}>Action</th>
+            <th style={th}>From → To</th>
+            <th style={{ ...th, textAlign: "right" }}>金額</th>
+            <th style={th}>通貨</th>
+            <th style={{ ...th, textAlign: "right" }}>手数料</th>
+            <th style={{ ...th, textAlign: "center" }}>課税対象</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((tr) => (
+            <tr key={tr.id} style={trRow}>
+              <td style={td}>{formatTime(tr.time)}</td>
+              <td style={td}>{tr.action}</td>
+              <td style={{ ...td, color: "#aab", fontSize: "0.82rem" }}>
+                {tr.source} → {tr.destination}
+              </td>
+              <td
+                style={{
+                  ...tdRight,
+                  color: tr.account_value_change >= 0 ? "#5dd58c" : "#ff8c8c",
+                }}
+              >
+                {tr.account_value_change.toFixed(4)}
+              </td>
+              <td style={td}>{tr.currency}</td>
+              <td style={tdRight}>{tr.fee.toFixed(4)}</td>
+              <td style={{ ...td, textAlign: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={tr.taxable}
+                  onChange={(e) => onUpdateTaxable(tr.id, e.target.checked)}
+                  title="確定申告で「その他収入」として計上する"
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   );
 }
 

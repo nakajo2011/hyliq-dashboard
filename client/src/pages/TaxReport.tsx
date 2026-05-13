@@ -18,12 +18,34 @@ import {
   buildTaxReport,
   listAvailableYears,
   toCsv,
+  type TaxFundingInput,
   type TaxReport,
   type TaxTradeInput,
+  type TaxTransferInput,
 } from "../lib/tax";
 import type { TradeLike } from "../lib/pnl";
 
 type TradeRecord = TradeLike & { id: string; account: string };
+type FundingRecord = {
+  id: string;
+  account: string;
+  time: string;
+  coin: string;
+  side: string;
+  payment: number;
+};
+type TransferRecord = {
+  id: string;
+  account: string;
+  time: string;
+  action: string;
+  source: string;
+  destination: string;
+  account_value_change: number;
+  fee: number;
+  currency: string;
+  taxable: boolean;
+};
 type AccountRecord = { id: string; name: string };
 type FxRecord = FxRate & { id: string };
 
@@ -33,6 +55,8 @@ type State =
   | {
       status: "ready";
       trades: TaxTradeInput[];
+      fundings: TaxFundingInput[];
+      transfers: TaxTransferInput[];
       fxRates: FxRate[];
     };
 
@@ -44,16 +68,27 @@ export function TaxReport() {
     let cancelled = false;
     (async () => {
       try {
-        const [accounts, trades, fxRows] = await Promise.all([
-          pb.collection("accounts").getFullList<AccountRecord>(),
-          pb.collection("trades").getFullList<TradeRecord>({ sort: "+time" }),
-          pb.collection("fx_rates").getFullList<FxRecord>(),
-        ]);
+        const [accounts, trades, fundings, transfers, fxRows] =
+          await Promise.all([
+            pb.collection("accounts").getFullList<AccountRecord>(),
+            pb
+              .collection("trades")
+              .getFullList<TradeRecord>({ sort: "+time" }),
+            pb
+              .collection("fundings")
+              .getFullList<FundingRecord>({ sort: "+time" }),
+            pb
+              .collection("transfers")
+              .getFullList<TransferRecord>({ sort: "+time" }),
+            pb.collection("fx_rates").getFullList<FxRecord>(),
+          ]);
         if (cancelled) return;
         const accountById = new Map(accounts.map((a) => [a.id, a.name]));
-        const enriched: TaxTradeInput[] = trades.map((t) => ({
+        const named = (id: string) =>
+          accountById.get(id) ?? "(unknown)";
+        const enrichedTrades: TaxTradeInput[] = trades.map((t) => ({
           id: t.id,
-          accountName: accountById.get(t.account) ?? "(unknown)",
+          accountName: named(t.account),
           time: t.time,
           coin: t.coin,
           dir: t.dir,
@@ -62,11 +97,37 @@ export function TaxReport() {
           fee: t.fee,
           closed_pnl: t.closed_pnl,
         }));
+        const enrichedFundings: TaxFundingInput[] = fundings.map((f) => ({
+          id: f.id,
+          accountName: named(f.account),
+          time: f.time,
+          coin: f.coin,
+          side: f.side,
+          payment: f.payment,
+        }));
+        const enrichedTransfers: TaxTransferInput[] = transfers.map((tr) => ({
+          id: tr.id,
+          accountName: named(tr.account),
+          time: tr.time,
+          action: tr.action,
+          source: tr.source,
+          destination: tr.destination,
+          account_value_change: tr.account_value_change,
+          fee: tr.fee,
+          currency: tr.currency,
+          taxable: tr.taxable,
+        }));
         const fxRates: FxRate[] = fxRows.map((r) => ({
           date: r.date.slice(0, 10),
           usd_jpy: r.usd_jpy,
         }));
-        setState({ status: "ready", trades: enriched, fxRates });
+        setState({
+          status: "ready",
+          trades: enrichedTrades,
+          fundings: enrichedFundings,
+          transfers: enrichedTransfers,
+          fxRates,
+        });
       } catch (e) {
         if (!cancelled) {
           setState({
@@ -84,7 +145,11 @@ export function TaxReport() {
   // Pick default year (latest with data) once the data loads.
   useEffect(() => {
     if (state.status === "ready" && year === null) {
-      const years = listAvailableYears(state.trades);
+      const years = listAvailableYears(
+        state.trades,
+        state.fundings,
+        state.transfers
+      );
       if (years.length > 0) setYear(years[0]);
     }
   }, [state, year]);
@@ -93,7 +158,11 @@ export function TaxReport() {
   if (state.status === "error")
     return <p style={{ color: "#ff6b6b" }}>❌ {state.message}</p>;
 
-  const availableYears = listAvailableYears(state.trades);
+  const availableYears = listAvailableYears(
+    state.trades,
+    state.fundings,
+    state.transfers
+  );
   if (availableYears.length === 0) {
     return (
       <div>
@@ -124,6 +193,8 @@ export function TaxReport() {
       availableYears={availableYears}
       onChangeYear={setYear}
       trades={state.trades}
+      fundings={state.fundings}
+      transfers={state.transfers}
       fxRates={state.fxRates}
       onFxChanged={reloadFxRates}
     />
@@ -135,6 +206,8 @@ function ReportView({
   availableYears,
   onChangeYear,
   trades,
+  fundings,
+  transfers,
   fxRates,
   onFxChanged,
 }: {
@@ -142,13 +215,15 @@ function ReportView({
   availableYears: number[];
   onChangeYear: (y: number) => void;
   trades: TaxTradeInput[];
+  fundings: TaxFundingInput[];
+  transfers: TaxTransferInput[];
   fxRates: FxRate[];
   onFxChanged: () => Promise<void>;
 }) {
   const lookup = useMemo(() => buildFxLookup(fxRates), [fxRates]);
   const report = useMemo(
-    () => buildTaxReport(trades, lookup, year),
-    [trades, lookup, year]
+    () => buildTaxReport(trades, fundings, transfers, lookup, year),
+    [trades, fundings, transfers, lookup, year]
   );
 
   const [editingDate, setEditingDate] = useState<string | null>(null);
@@ -260,17 +335,18 @@ function ReportView({
       )}
 
       <section style={section}>
-        <h2 style={h2}>月別合計</h2>
+        <h2 style={h2}>月別合計 (JPY、種別別)</h2>
         {report.monthlyTotals.length === 0 ? (
-          <p style={{ color: "#666" }}>この年度に取引はありません</p>
+          <p style={{ color: "#666" }}>この年度に対象データはありません</p>
         ) : (
           <table style={table}>
             <thead>
               <tr style={trHead}>
                 <th style={th}>月</th>
-                <th style={tdRightHead}>件数</th>
-                <th style={tdRightHead}>PnL (USD)</th>
-                <th style={tdRightHead}>PnL (JPY)</th>
+                <th style={tdRightHead}>取引</th>
+                <th style={tdRightHead}>ファンディング</th>
+                <th style={tdRightHead}>その他収入</th>
+                <th style={tdRightHead}>合計</th>
                 <th style={tdRightHead}>レート欠損</th>
               </tr>
             </thead>
@@ -278,55 +354,36 @@ function ReportView({
               {report.monthlyTotals.map((m) => (
                 <tr key={m.month} style={trRow}>
                   <td style={td}>{m.month}</td>
-                  <td style={tdRight}>{m.rows}</td>
-                  <td
-                    style={{
-                      ...tdRight,
-                      color: m.pnl_usd >= 0 ? "#5dd58c" : "#ff8c8c",
-                    }}
-                  >
-                    {m.pnl_usd.toFixed(2)}
+                  <td style={{ ...tdRight, color: m.trade.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c" }}>
+                    {m.trade.amount_jpy.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </td>
-                  <td
-                    style={{
-                      ...tdRight,
-                      color: m.pnl_jpy >= 0 ? "#5dd58c" : "#ff8c8c",
-                    }}
-                  >
-                    {m.pnl_jpy.toLocaleString(undefined, {
-                      maximumFractionDigits: 0,
-                    })}
+                  <td style={{ ...tdRight, color: m.funding.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c" }}>
+                    {m.funding.amount_jpy.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                   </td>
-                  <td
-                    style={{
-                      ...tdRight,
-                      color: m.missing > 0 ? "#f5d678" : "#888",
-                    }}
-                  >
+                  <td style={{ ...tdRight, color: m.transfer.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c" }}>
+                    {m.transfer.amount_jpy.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </td>
+                  <td style={{ ...tdRight, fontWeight: 600, color: m.total.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c" }}>
+                    {m.total.amount_jpy.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                  </td>
+                  <td style={{ ...tdRight, color: m.missing > 0 ? "#f5d678" : "#888" }}>
                     {m.missing > 0 ? m.missing : "-"}
                   </td>
                 </tr>
               ))}
               <tr style={{ ...trRow, fontWeight: 600 }}>
                 <td style={td}>合計</td>
-                <td style={tdRight}>{report.total.rows}</td>
-                <td
-                  style={{
-                    ...tdRight,
-                    color: report.total.pnl_usd >= 0 ? "#5dd58c" : "#ff8c8c",
-                  }}
-                >
-                  {report.total.pnl_usd.toFixed(2)}
+                <td style={{ ...tdRight, color: report.total.trade.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c" }}>
+                  {report.total.trade.amount_jpy.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </td>
-                <td
-                  style={{
-                    ...tdRight,
-                    color: report.total.pnl_jpy >= 0 ? "#5dd58c" : "#ff8c8c",
-                  }}
-                >
-                  {report.total.pnl_jpy.toLocaleString(undefined, {
-                    maximumFractionDigits: 0,
-                  })}
+                <td style={{ ...tdRight, color: report.total.funding.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c" }}>
+                  {report.total.funding.amount_jpy.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </td>
+                <td style={{ ...tdRight, color: report.total.transfer.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c" }}>
+                  {report.total.transfer.amount_jpy.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                </td>
+                <td style={{ ...tdRight, color: report.total.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c" }}>
+                  {report.total.amount_jpy.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </td>
                 <td style={tdRight}>
                   {report.total.missing > 0 ? report.total.missing : "-"}
@@ -338,51 +395,49 @@ function ReportView({
       </section>
 
       <section style={section}>
-        <h2 style={h2}>取引明細 ({report.rows.length} 件)</h2>
+        <h2 style={h2}>明細 ({report.rows.length} 件)</h2>
         {report.rows.length === 0 ? (
-          <p style={{ color: "#666" }}>この年度に取引はありません</p>
+          <p style={{ color: "#666" }}>この年度に対象データはありません</p>
         ) : (
           <table style={table}>
             <thead>
               <tr style={trHead}>
                 <th style={th}>日付</th>
+                <th style={th}>種別</th>
                 <th style={th}>アカウント</th>
-                <th style={th}>通貨</th>
-                <th style={th}>方向</th>
-                <th style={tdRightHead}>数量</th>
-                <th style={tdRightHead}>価格</th>
-                <th style={tdRightHead}>PnL (USD)</th>
+                <th style={th}>内容</th>
+                <th style={tdRightHead}>金額 (USD)</th>
                 <th style={tdRightHead}>USD/JPY</th>
-                <th style={tdRightHead}>PnL (JPY)</th>
+                <th style={tdRightHead}>金額 (JPY)</th>
               </tr>
             </thead>
             <tbody>
               {report.rows.map((r) => (
-                <tr key={r.tradeId} style={trRow}>
+                <tr key={`${r.kind}-${r.id}`} style={trRow}>
                   <td style={td}>{r.date}</td>
-                  <td style={td}>{r.accountName}</td>
-                  <td style={td}>{r.coin}</td>
                   <td
                     style={{
                       ...td,
-                      color: r.dir.includes("Long") ? "#5dd58c" : "#ff8c8c",
+                      color:
+                        r.kind === "trade"
+                          ? "#aab"
+                          : r.kind === "funding"
+                            ? "#f5d678"
+                            : "#6cf",
+                      fontSize: "0.78rem",
                     }}
                   >
-                    {r.dir}
+                    {KIND_LABEL_JA[r.kind]}
                   </td>
-                  <td style={tdRight}>
-                    {r.sz.toLocaleString(undefined, {
-                      maximumFractionDigits: 6,
-                    })}
-                  </td>
-                  <td style={tdRight}>{r.px.toFixed(2)}</td>
+                  <td style={td}>{r.accountName}</td>
+                  <td style={td}>{r.description}</td>
                   <td
                     style={{
                       ...tdRight,
-                      color: r.pnl_usd >= 0 ? "#5dd58c" : "#ff8c8c",
+                      color: r.amount_usd >= 0 ? "#5dd58c" : "#ff8c8c",
                     }}
                   >
-                    {r.pnl_usd.toFixed(4)}
+                    {r.amount_usd.toFixed(4)}
                   </td>
                   <td style={tdRight}>
                     {editingDate === r.date ? (
@@ -458,15 +513,15 @@ function ReportView({
                     style={{
                       ...tdRight,
                       color:
-                        r.pnl_jpy == null
+                        r.amount_jpy == null
                           ? "#666"
-                          : r.pnl_jpy >= 0
+                          : r.amount_jpy >= 0
                             ? "#5dd58c"
                             : "#ff8c8c",
                     }}
                   >
-                    {r.pnl_jpy != null
-                      ? r.pnl_jpy.toLocaleString(undefined, {
+                    {r.amount_jpy != null
+                      ? r.amount_jpy.toLocaleString(undefined, {
                           maximumFractionDigits: 0,
                         })
                       : "-"}
@@ -478,34 +533,54 @@ function ReportView({
         )}
         <p style={{ color: "#888", fontSize: "0.8rem", marginTop: 8 }}>
           USD/JPY 列をクリックすると、その日のレートを直接登録できます
-          (同じ日付の取引すべてに自動反映されます)。* 印は当日のレート未登録のため直近過去のレートで換算した行。
+          (同じ日付のレコードすべてに自動反映されます)。
+          * 印は当日のレート未登録のため直近過去のレートで換算した行。
+          ファンディングは全件、入出金は アカウント詳細で「課税対象」を ON
+          にした行のみ含まれます。
         </p>
       </section>
     </div>
   );
 }
 
+const KIND_LABEL_JA: Record<TaxReport["rows"][number]["kind"], string> = {
+  trade: "取引",
+  funding: "Funding",
+  transfer: "その他",
+};
+
 function Kpis({ report }: { report: TaxReport }) {
   const kpis = [
     {
-      label: "取引数",
-      value: report.total.rows.toLocaleString(),
-      color: "#aab",
-    },
-    {
-      label: "PnL (USD)",
-      value: report.total.pnl_usd.toLocaleString(undefined, {
-        maximumFractionDigits: 2,
-        minimumFractionDigits: 2,
-      }),
-      color: report.total.pnl_usd >= 0 ? "#5dd58c" : "#ff8c8c",
-    },
-    {
-      label: "PnL (JPY)",
-      value: report.total.pnl_jpy.toLocaleString(undefined, {
+      label: "取引 PnL (JPY)",
+      value: report.total.trade.amount_jpy.toLocaleString(undefined, {
         maximumFractionDigits: 0,
       }),
-      color: report.total.pnl_jpy >= 0 ? "#5dd58c" : "#ff8c8c",
+      color:
+        report.total.trade.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c",
+    },
+    {
+      label: "ファンディング (JPY)",
+      value: report.total.funding.amount_jpy.toLocaleString(undefined, {
+        maximumFractionDigits: 0,
+      }),
+      color:
+        report.total.funding.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c",
+    },
+    {
+      label: "その他収入 (JPY)",
+      value: report.total.transfer.amount_jpy.toLocaleString(undefined, {
+        maximumFractionDigits: 0,
+      }),
+      color:
+        report.total.transfer.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c",
+    },
+    {
+      label: "合計 (JPY)",
+      value: report.total.amount_jpy.toLocaleString(undefined, {
+        maximumFractionDigits: 0,
+      }),
+      color: report.total.amount_jpy >= 0 ? "#5dd58c" : "#ff8c8c",
     },
     {
       label: "レート欠損",
