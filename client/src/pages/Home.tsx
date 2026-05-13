@@ -25,6 +25,8 @@ import type {
   TransferLike,
 } from "../lib/pnl";
 import type { FxRate } from "../lib/fx";
+import { fmtJpy, fmtUsd } from "../lib/format";
+import { h2 as sectionTitle, td, tdRight, th } from "../styles";
 
 interface AccountRow {
   id: string;
@@ -527,38 +529,3 @@ function KpiRow({
   );
 }
 
-function fmtUsd(n: number): string {
-  return n.toLocaleString(undefined, {
-    maximumFractionDigits: 2,
-    minimumFractionDigits: 2,
-  });
-}
-
-function fmtJpy(n: number): string {
-  return n.toLocaleString(undefined, {
-    maximumFractionDigits: 0,
-  });
-}
-
-const sectionTitle: React.CSSProperties = {
-  marginBottom: "0.6rem",
-  color: "#aab",
-  fontSize: "1rem",
-};
-const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: "0.55rem 0.6rem",
-  fontWeight: 500,
-  fontSize: "0.78rem",
-  textTransform: "uppercase",
-  letterSpacing: 0.5,
-};
-const td: React.CSSProperties = {
-  padding: "0.5rem 0.6rem",
-  verticalAlign: "middle",
-};
-const tdRight: React.CSSProperties = {
-  ...td,
-  textAlign: "right",
-  fontVariantNumeric: "tabular-nums",
-};

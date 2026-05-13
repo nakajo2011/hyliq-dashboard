@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { pb } from "../lib/pb";
+import {
+  btnDisabled,
+  btnPrimary,
+  h2,
+  table,
+  td,
+  tdRight,
+  tdRightHead,
+  th,
+  trHead,
+  trRow,
+} from "../styles";
 import { buildFxLookup, upsertFxRate, type FxRate } from "../lib/fx";
 import {
   buildTaxReport,
@@ -256,10 +268,10 @@ function ReportView({
             <thead>
               <tr style={trHead}>
                 <th style={th}>月</th>
-                <th style={tdRightH}>件数</th>
-                <th style={tdRightH}>PnL (USD)</th>
-                <th style={tdRightH}>PnL (JPY)</th>
-                <th style={tdRightH}>レート欠損</th>
+                <th style={tdRightHead}>件数</th>
+                <th style={tdRightHead}>PnL (USD)</th>
+                <th style={tdRightHead}>PnL (JPY)</th>
+                <th style={tdRightHead}>レート欠損</th>
               </tr>
             </thead>
             <tbody>
@@ -337,11 +349,11 @@ function ReportView({
                 <th style={th}>アカウント</th>
                 <th style={th}>通貨</th>
                 <th style={th}>方向</th>
-                <th style={tdRightH}>数量</th>
-                <th style={tdRightH}>価格</th>
-                <th style={tdRightH}>PnL (USD)</th>
-                <th style={tdRightH}>USD/JPY</th>
-                <th style={tdRightH}>PnL (JPY)</th>
+                <th style={tdRightHead}>数量</th>
+                <th style={tdRightHead}>価格</th>
+                <th style={tdRightHead}>PnL (USD)</th>
+                <th style={tdRightHead}>USD/JPY</th>
+                <th style={tdRightHead}>PnL (JPY)</th>
               </tr>
             </thead>
             <tbody>
@@ -538,14 +550,8 @@ function Kpis({ report }: { report: TaxReport }) {
   );
 }
 
-const section: React.CSSProperties = {
-  marginTop: "1.8rem",
-};
-const h2: React.CSSProperties = {
-  marginBottom: "0.6rem",
-  color: "#aab",
-  fontSize: "1rem",
-};
+/** TaxReport-local: plain top-margin spacer, *not* the shared panel `section`. */
+const section: React.CSSProperties = { marginTop: "1.8rem" };
 const selectStyle: React.CSSProperties = {
   background: "#0f1218",
   color: "#e6e6e6",
@@ -553,48 +559,6 @@ const selectStyle: React.CSSProperties = {
   borderRadius: 6,
   padding: "0.35rem 0.5rem",
   marginLeft: 6,
-};
-const btnPrimary: React.CSSProperties = {
-  background: "#2563eb",
-  color: "#fff",
-  border: "none",
-  borderRadius: 6,
-  padding: "0.45rem 1rem",
-  cursor: "pointer",
-};
-const btnDisabled: React.CSSProperties = {
-  ...btnPrimary,
-  background: "#2a3047",
-  color: "#666",
-  cursor: "not-allowed",
-};
-const table: React.CSSProperties = {
-  width: "100%",
-  borderCollapse: "collapse",
-  fontSize: "0.88rem",
-};
-const trHead: React.CSSProperties = {
-  borderBottom: "1px solid #2a3047",
-  color: "#aab",
-};
-const trRow: React.CSSProperties = { borderBottom: "1px solid #1a1f2c" };
-const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: "0.55rem 0.6rem",
-  fontWeight: 500,
-  fontSize: "0.78rem",
-  textTransform: "uppercase",
-  letterSpacing: 0.5,
-};
-const tdRightH: React.CSSProperties = { ...th, textAlign: "right" };
-const td: React.CSSProperties = {
-  padding: "0.5rem 0.6rem",
-  verticalAlign: "middle",
-};
-const tdRight: React.CSSProperties = {
-  ...td,
-  textAlign: "right",
-  fontVariantNumeric: "tabular-nums",
 };
 const inlineInput: React.CSSProperties = {
   background: "#0f1218",

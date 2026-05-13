@@ -17,6 +17,18 @@ import {
   type MizuhoParseResult,
 } from "../lib/fx";
 import { dateKeyJst } from "../lib/pnl";
+import { dateOnly } from "../lib/format";
+import {
+  btnDanger,
+  btnDangerDisabled,
+  btnDisabled,
+  btnGhost,
+  btnPrimary,
+  h2,
+  input,
+  lbl,
+  section,
+} from "../styles";
 
 interface FxRow {
   id: string;
@@ -42,9 +54,6 @@ function loadSourceFromStorage(): RateSource | null {
   return null;
 }
 
-function dateOnly(s: string): string {
-  return s.slice(0, 10);
-}
 
 export function Fx() {
   const [rows, setRows] = useState<FxRow[]>([]);
@@ -1070,65 +1079,3 @@ export function Fx() {
   );
 }
 
-const section: React.CSSProperties = {
-  marginTop: "1.5rem",
-  padding: "1rem",
-  background: "#141823",
-  border: "1px solid #2a3047",
-  borderRadius: 8,
-};
-const h2: React.CSSProperties = {
-  marginTop: 0,
-  marginBottom: "0.6rem",
-  fontSize: "1rem",
-  color: "#aab",
-};
-const lbl: React.CSSProperties = {
-  display: "block",
-  fontSize: "0.8rem",
-  color: "#aab",
-  marginBottom: 4,
-};
-const input: React.CSSProperties = {
-  background: "#0f1218",
-  color: "#e6e6e6",
-  border: "1px solid #2a3047",
-  borderRadius: 6,
-  padding: "0.4rem 0.6rem",
-};
-const btnPrimary: React.CSSProperties = {
-  background: "#2563eb",
-  color: "#fff",
-  border: "none",
-  borderRadius: 6,
-  padding: "0.45rem 0.9rem",
-  cursor: "pointer",
-};
-const btnDisabled: React.CSSProperties = {
-  ...btnPrimary,
-  background: "#2a3047",
-  color: "#666",
-  cursor: "not-allowed",
-};
-const btnGhost: React.CSSProperties = {
-  background: "transparent",
-  color: "#aab",
-  border: "1px solid #2a3047",
-  borderRadius: 6,
-  padding: "0.3rem 0.7rem",
-  cursor: "pointer",
-};
-const btnDanger: React.CSSProperties = {
-  background: "transparent",
-  color: "#ff8c8c",
-  border: "1px solid #6b2a2a",
-  borderRadius: 6,
-  padding: "0.4rem 0.8rem",
-  cursor: "pointer",
-  fontSize: "0.9rem",
-};
-const btnDangerDisabled: React.CSSProperties = {
-  ...btnDanger,
-  color: "#555",
-  cursor: "not-allowed",
-};

@@ -1,6 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { pb } from "../lib/pb";
+import {
+  btnDanger,
+  btnGhost,
+  btnPrimary,
+  input as baseInput,
+  td,
+  tdRight,
+  th,
+} from "../styles";
+
+// Accounts page-specific input style: same as base but stretches to fill cell.
+const inputStyle: React.CSSProperties = { ...baseInput, width: "100%" };
 
 interface AccountRow {
   id: string;
@@ -313,54 +325,3 @@ function EditCell({
   );
 }
 
-const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: "0.55rem 0.6rem",
-  fontWeight: 500,
-  fontSize: "0.82rem",
-  textTransform: "uppercase",
-  letterSpacing: 0.5,
-};
-const td: React.CSSProperties = {
-  padding: "0.6rem",
-  verticalAlign: "middle",
-};
-const tdRight: React.CSSProperties = {
-  ...td,
-  textAlign: "right",
-  fontVariantNumeric: "tabular-nums",
-};
-const inputStyle: React.CSSProperties = {
-  background: "#0f1218",
-  color: "#e6e6e6",
-  border: "1px solid #2a3047",
-  borderRadius: 6,
-  padding: "0.3rem 0.5rem",
-  width: "100%",
-};
-const btnPrimary: React.CSSProperties = {
-  background: "#2563eb",
-  color: "#fff",
-  border: "none",
-  borderRadius: 6,
-  padding: "0.3rem 0.7rem",
-  cursor: "pointer",
-  marginRight: 6,
-};
-const btnGhost: React.CSSProperties = {
-  background: "transparent",
-  color: "#aab",
-  border: "1px solid #2a3047",
-  borderRadius: 6,
-  padding: "0.3rem 0.7rem",
-  cursor: "pointer",
-  marginRight: 6,
-};
-const btnDanger: React.CSSProperties = {
-  background: "transparent",
-  color: "#ff8c8c",
-  border: "1px solid #6b2a2a",
-  borderRadius: 6,
-  padding: "0.3rem 0.7rem",
-  cursor: "pointer",
-};

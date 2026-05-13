@@ -13,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { pb } from "../lib/pb";
+import { table, td, tdRight, th, trHead, trRow } from "../styles";
 import {
   buildAccountStats,
   buildCoinPnL,
@@ -338,9 +339,9 @@ function KpiRow({
 
 function PositionsTable({ positions }: { positions: OpenPosition[] }) {
   return (
-    <table style={tableStyle}>
+    <table style={table}>
       <thead>
-        <tr style={trHeader}>
+        <tr style={trHead}>
           <th style={th}>Coin</th>
           <th style={th}>Side</th>
           <th style={{ ...th, textAlign: "right" }}>Size</th>
@@ -372,9 +373,9 @@ function PositionsTable({ positions }: { positions: OpenPosition[] }) {
 
 function CoinTable({ coins }: { coins: CoinPnL[] }) {
   return (
-    <table style={tableStyle}>
+    <table style={table}>
       <thead>
-        <tr style={trHeader}>
+        <tr style={trHead}>
           <th style={th}>Coin</th>
           <th style={{ ...th, textAlign: "right" }}>Trades</th>
           <th style={{ ...th, textAlign: "right" }}>Realized PnL</th>
@@ -404,9 +405,9 @@ function CoinTable({ coins }: { coins: CoinPnL[] }) {
 
 function TradesTable({ trades }: { trades: TradeRow[] }) {
   return (
-    <table style={tableStyle}>
+    <table style={table}>
       <thead>
-        <tr style={trHeader}>
+        <tr style={trHead}>
           <th style={th}>Time (JST)</th>
           <th style={th}>Coin</th>
           <th style={th}>Dir</th>
@@ -469,30 +470,3 @@ function formatTime(iso: string): string {
   return `${date} ${hh}:${mm}`;
 }
 
-const tableStyle: React.CSSProperties = {
-  width: "100%",
-  borderCollapse: "collapse",
-  fontSize: "0.88rem",
-};
-const trHeader: React.CSSProperties = {
-  borderBottom: "1px solid #2a3047",
-  color: "#aab",
-};
-const trRow: React.CSSProperties = { borderBottom: "1px solid #1a1f2c" };
-const th: React.CSSProperties = {
-  textAlign: "left",
-  padding: "0.55rem 0.6rem",
-  fontWeight: 500,
-  fontSize: "0.78rem",
-  textTransform: "uppercase",
-  letterSpacing: 0.5,
-};
-const td: React.CSSProperties = {
-  padding: "0.5rem 0.6rem",
-  verticalAlign: "middle",
-};
-const tdRight: React.CSSProperties = {
-  ...td,
-  textAlign: "right",
-  fontVariantNumeric: "tabular-nums",
-};
