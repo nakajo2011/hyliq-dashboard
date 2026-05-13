@@ -17,12 +17,16 @@ import {
   buildAccountStats,
   buildCoinPnL,
   buildDailyPnL,
+  convertTradesToJpy,
+  CONVERSION_METHOD_LABEL,
+  type ConversionMethod,
 } from "../lib/pnl";
 import type {
   FundingLike,
   TradeLike,
   TransferLike,
 } from "../lib/pnl";
+import type { FxRate } from "../lib/fx";
 
 interface AccountRow {
   id: string;
@@ -32,6 +36,9 @@ interface AccountRow {
 type TradeRow = TradeLike & { id: string; account: string };
 type FundingRow = FundingLike & { id: string; account: string };
 type TransferRow = TransferLike & { id: string; account: string };
+type FxRecord = FxRate & { id: string };
+
+type Currency = "USD" | "JPY";
 
 type State =
   | { status: "loading" }
@@ -42,6 +49,7 @@ type State =
       trades: TradeRow[];
       fundings: FundingRow[];
       transfers: TransferRow[];
+      fxRates: FxRate[];
     }
   | { status: "error"; message: string };
 
@@ -72,15 +80,27 @@ export function Home() {
           if (!cancelled) setState({ status: "no-data", healthOk: true });
           return;
         }
-        const [trades, fundings, transfers] = await Promise.all([
+        const [trades, fundings, transfers, fxRows] = await Promise.all([
           pb.collection("trades").getFullList<TradeRow>({ sort: "+time" }),
           pb.collection("fundings").getFullList<FundingRow>({ sort: "+time" }),
           pb
             .collection("transfers")
             .getFullList<TransferRow>({ sort: "+time" }),
+          pb.collection("fx_rates").getFullList<FxRecord>(),
         ]);
         if (cancelled) return;
-        setState({ status: "ready", accounts, trades, fundings, transfers });
+        const fxRates: FxRate[] = fxRows.map((r) => ({
+          date: r.date.slice(0, 10),
+          usd_jpy: r.usd_jpy,
+        }));
+        setState({
+          status: "ready",
+          accounts,
+          trades,
+          fundings,
+          transfers,
+          fxRates,
+        });
       } catch (e) {
         if (cancelled) return;
         setState({
@@ -137,34 +157,113 @@ function EmptyState() {
   );
 }
 
+/**
+ * Replace closed_pnl with pnl_jpy for trades that have a resolvable rate.
+ * Trades without a rate are dropped so they don't skew the dashboard.
+ */
+function jpyConvertedTrades<T extends TradeRow>(
+  trades: T[],
+  fxRates: FxRate[],
+  method: ConversionMethod
+): { trades: T[]; missing: number } {
+  const result = convertTradesToJpy(trades, fxRates, method);
+  const kept: T[] = [];
+  for (let i = 0; i < result.trades.length; i++) {
+    const c = result.trades[i];
+    if (c.pnl_jpy != null) {
+      kept.push({ ...trades[i], closed_pnl: c.pnl_jpy });
+    }
+  }
+  return { trades: kept, missing: result.missingCount };
+}
+
 function Dashboard({
   state,
 }: {
   state: Extract<State, { status: "ready" }>;
 }) {
-  const { accounts, trades, fundings, transfers } = state;
+  const { accounts, trades, fundings, transfers, fxRates } = state;
+
+  const [currency, setCurrency] = useState<Currency>("USD");
+  const [method, setMethod] = useState<ConversionMethod>("daily");
+
+  // Convert (or pass through) the trades based on the selected mode.
+  const { displayedTrades, missingCount } = useMemo(() => {
+    if (currency === "USD") {
+      return { displayedTrades: trades, missingCount: 0 };
+    }
+    const { trades: kept, missing } = jpyConvertedTrades(
+      trades,
+      fxRates,
+      method
+    );
+    return { displayedTrades: kept, missingCount: missing };
+  }, [currency, method, trades, fxRates]);
 
   const stats = useMemo(
-    () => buildAccountStats(trades, fundings, transfers),
-    [trades, fundings, transfers]
+    () => buildAccountStats(displayedTrades, fundings, transfers),
+    [displayedTrades, fundings, transfers]
   );
-  const daily = useMemo(() => buildDailyPnL(trades), [trades]);
-  const coinPnL = useMemo(() => buildCoinPnL(trades), [trades]);
+  const daily = useMemo(() => buildDailyPnL(displayedTrades), [displayedTrades]);
+  const coinPnL = useMemo(() => buildCoinPnL(displayedTrades), [displayedTrades]);
+
+  const fmt = currency === "JPY" ? fmtJpy : fmtUsd;
+  const currencyLabel = currency === "JPY" ? "JPY" : "USD";
 
   return (
     <div>
-      <h1 style={{ marginTop: 0 }}>Home</h1>
-      <p style={{ color: "#888" }}>
-        {accounts.length} アカウントの合算サマリ。{" "}
-        <Link to="/accounts" style={{ color: "#6cf" }}>
-          各アカウント詳細へ
-        </Link>
-      </p>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          flexWrap: "wrap",
+          gap: "1rem",
+        }}
+      >
+        <div>
+          <h1 style={{ marginTop: 0, marginBottom: 4 }}>Home</h1>
+          <p style={{ color: "#888", margin: 0 }}>
+            {accounts.length} アカウントの合算サマリ。{" "}
+            <Link to="/accounts" style={{ color: "#6cf" }}>
+              各アカウント詳細へ
+            </Link>
+          </p>
+        </div>
+        <DisplayControls
+          currency={currency}
+          method={method}
+          onChangeCurrency={setCurrency}
+          onChangeMethod={setMethod}
+        />
+      </div>
 
-      <KpiRow stats={stats} />
+      {currency === "JPY" && missingCount > 0 && (
+        <div
+          style={{
+            marginTop: "1rem",
+            padding: "0.6rem 0.9rem",
+            background: "#3b2f1d",
+            border: "1px solid #6b522a",
+            borderRadius: 6,
+            color: "#f5d678",
+            fontSize: "0.88rem",
+          }}
+        >
+          ⚠️ FX レート未登録の取引が {missingCount} 件あるため集計から除外しています。
+          <Link to="/fx" style={{ color: "#6cf", marginLeft: 4 }}>
+            /fx で登録
+          </Link>
+        </div>
+      )}
+
+      <KpiRow stats={stats} currency={currency} fmt={fmt} />
 
       <section style={{ marginTop: "1.8rem" }}>
-        <h2 style={sectionTitle}>累積実現 PnL (全アカウント合算, USD)</h2>
+        <h2 style={sectionTitle}>
+          累積実現 PnL (全アカウント合算, {currencyLabel}
+          {currency === "JPY" && ` / ${CONVERSION_METHOD_LABEL[method]}`})
+        </h2>
         {daily.length === 0 ? (
           <p style={{ color: "#666" }}>取引データがありません</p>
         ) : (
@@ -179,9 +278,7 @@ function Dashboard({
                   border: "1px solid #2a3047",
                 }}
                 labelStyle={{ color: "#aab" }}
-                formatter={(v) =>
-                  typeof v === "number" ? v.toFixed(2) : String(v)
-                }
+                formatter={(v) => (typeof v === "number" ? fmt(v) : String(v))}
               />
               <Line
                 type="monotone"
@@ -196,7 +293,7 @@ function Dashboard({
       </section>
 
       <section style={{ marginTop: "1.8rem" }}>
-        <h2 style={sectionTitle}>コイン別 実現 PnL</h2>
+        <h2 style={sectionTitle}>コイン別 実現 PnL ({currencyLabel})</h2>
         {coinPnL.length === 0 ? (
           <p style={{ color: "#666" }}>取引データがありません</p>
         ) : (
@@ -211,9 +308,7 @@ function Dashboard({
                   border: "1px solid #2a3047",
                 }}
                 labelStyle={{ color: "#aab" }}
-                formatter={(v) =>
-                  typeof v === "number" ? v.toFixed(2) : String(v)
-                }
+                formatter={(v) => (typeof v === "number" ? fmt(v) : String(v))}
               />
               <Bar dataKey="realizedPnl">
                 {coinPnL.map((c) => (
@@ -229,14 +324,106 @@ function Dashboard({
       </section>
 
       <section style={{ marginTop: "1.8rem" }}>
-        <h2 style={sectionTitle}>アカウント別 内訳</h2>
+        <h2 style={sectionTitle}>アカウント別 内訳 ({currencyLabel})</h2>
         <AccountsBreakdown
           accounts={accounts}
-          trades={trades}
+          trades={displayedTrades}
           fundings={fundings}
           transfers={transfers}
+          fmt={fmt}
         />
       </section>
+    </div>
+  );
+}
+
+function DisplayControls({
+  currency,
+  method,
+  onChangeCurrency,
+  onChangeMethod,
+}: {
+  currency: Currency;
+  method: ConversionMethod;
+  onChangeCurrency: (c: Currency) => void;
+  onChangeMethod: (m: ConversionMethod) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: "0.8rem",
+        alignItems: "center",
+        flexWrap: "wrap",
+      }}
+    >
+      <ToggleGroup
+        label="通貨"
+        options={[
+          { value: "USD", label: "USD" },
+          { value: "JPY", label: "JPY" },
+        ]}
+        value={currency}
+        onChange={(v) => onChangeCurrency(v as Currency)}
+      />
+      {currency === "JPY" && (
+        <ToggleGroup
+          label="換算方法"
+          options={[
+            { value: "daily", label: "日次" },
+            { value: "total-average", label: "総平均法" },
+            { value: "moving-average", label: "移動平均法" },
+          ]}
+          value={method}
+          onChange={(v) => onChangeMethod(v as ConversionMethod)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ToggleGroup({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: { value: string; label: string }[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <span style={{ color: "#888", fontSize: "0.78rem" }}>{label}</span>
+      <div
+        style={{
+          display: "inline-flex",
+          background: "#0f1218",
+          border: "1px solid #2a3047",
+          borderRadius: 6,
+          padding: 2,
+        }}
+      >
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            style={{
+              background: value === opt.value ? "#2563eb" : "transparent",
+              color: value === opt.value ? "#fff" : "#aab",
+              border: "none",
+              borderRadius: 4,
+              padding: "0.25rem 0.65rem",
+              fontSize: "0.82rem",
+              cursor: "pointer",
+            }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -246,11 +433,13 @@ function AccountsBreakdown({
   trades,
   fundings,
   transfers,
+  fmt,
 }: {
   accounts: AccountRow[];
   trades: TradeRow[];
   fundings: FundingRow[];
   transfers: TransferRow[];
+  fmt: (n: number) => string;
 }) {
   const rows = useMemo(() => {
     return accounts
@@ -300,7 +489,7 @@ function AccountsBreakdown({
                 color: r.realizedPnl >= 0 ? "#5dd58c" : "#ff8c8c",
               }}
             >
-              {r.realizedPnl.toFixed(2)}
+              {fmt(r.realizedPnl)}
             </td>
             <td style={tdRight}>{r.totalFees.toFixed(4)}</td>
             <td
@@ -321,31 +510,47 @@ function AccountsBreakdown({
 
 function KpiRow({
   stats,
+  currency,
+  fmt,
 }: {
   stats: ReturnType<typeof buildAccountStats>;
+  currency: Currency;
+  fmt: (n: number) => string;
 }) {
   const kpis = [
     {
-      label: "実現 PnL (USD)",
-      value: stats.realizedPnl,
+      label: `実現 PnL (${currency})`,
+      value: fmt(stats.realizedPnl),
       color: stats.realizedPnl >= 0 ? "#5dd58c" : "#ff8c8c",
     },
-    { label: "手数料合計", value: stats.totalFees, color: "#aab" },
     {
-      label: "ファンディング純額",
-      value: stats.fundingNet,
+      label: "手数料合計 (USD)",
+      value: stats.totalFees.toLocaleString(undefined, {
+        maximumFractionDigits: 4,
+        minimumFractionDigits: 2,
+      }),
+      color: "#aab",
+    },
+    {
+      label: "ファンディング純額 (USD)",
+      value: stats.fundingNet.toLocaleString(undefined, {
+        maximumFractionDigits: 4,
+        minimumFractionDigits: 2,
+      }),
       color: stats.fundingNet >= 0 ? "#5dd58c" : "#ff8c8c",
     },
     {
       label: "入出金純額 (USDC)",
-      value: stats.netDeposits,
+      value: stats.netDeposits.toLocaleString(undefined, {
+        maximumFractionDigits: 2,
+        minimumFractionDigits: 2,
+      }),
       color: "#aab",
     },
     {
       label: "取引数",
-      value: stats.tradeCount,
+      value: stats.tradeCount.toLocaleString(),
       color: "#aab",
-      decimals: 0,
     },
   ];
   return (
@@ -377,15 +582,25 @@ function KpiRow({
               fontVariantNumeric: "tabular-nums",
             }}
           >
-            {k.value.toLocaleString(undefined, {
-              maximumFractionDigits: k.decimals ?? 2,
-              minimumFractionDigits: k.decimals ?? 2,
-            })}
+            {k.value}
           </div>
         </div>
       ))}
     </div>
   );
+}
+
+function fmtUsd(n: number): string {
+  return n.toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  });
+}
+
+function fmtJpy(n: number): string {
+  return n.toLocaleString(undefined, {
+    maximumFractionDigits: 0,
+  });
 }
 
 const sectionTitle: React.CSSProperties = {
