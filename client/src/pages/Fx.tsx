@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { pb } from "../lib/pb";
 import {
   fetchFrankfurterRange,
   parseBulkFxInput,
+  parseMizuhoCsv,
   upsertFxRate,
+  type MizuhoParseResult,
 } from "../lib/fx";
 import { dateKeyJst } from "../lib/pnl";
 
@@ -39,6 +41,20 @@ export function Fx() {
       }
     | { status: "error"; message: string }
   >({ status: "idle" });
+
+  // ── みずほ CSV 取り込み state ────────────────────────────────────
+  const [mizuhoFile, setMizuhoFile] = useState<File | null>(null);
+  const [mizuhoParsed, setMizuhoParsed] = useState<MizuhoParseResult | null>(
+    null
+  );
+  const [mizuhoStatus, setMizuhoStatus] = useState<
+    | { status: "idle" }
+    | { status: "running" }
+    | { status: "done"; saved: number; skipped: number }
+    | { status: "error"; message: string }
+  >({ status: "idle" });
+  const [mizuhoDrag, setMizuhoDrag] = useState(false);
+  const mizuhoInputRef = useRef<HTMLInputElement>(null);
 
   const [skipExisting, setSkipExisting] = useState(true);
   const [rangeFrom, setRangeFrom] = useState("");
@@ -183,6 +199,64 @@ export function Fx() {
     await apiFetchAndStore(rangeFrom, rangeTo);
   };
 
+  const handleMizuhoFile = async (file: File) => {
+    setMizuhoFile(file);
+    setMizuhoParsed(null);
+    setMizuhoStatus({ status: "idle" });
+    try {
+      const buf = await file.arrayBuffer();
+      const parsed = parseMizuhoCsv(buf);
+      setMizuhoParsed(parsed);
+      if (parsed.rates.length === 0 && parsed.errors.length > 0) {
+        setMizuhoStatus({ status: "error", message: parsed.errors[0] });
+      }
+    } catch (e) {
+      setMizuhoStatus({
+        status: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
+  const handleMizuhoSave = async () => {
+    if (!mizuhoParsed || mizuhoParsed.rates.length === 0) return;
+    setMizuhoStatus({ status: "running" });
+
+    let existing = new Set<string>();
+    if (skipExisting) {
+      try {
+        const list = await pb
+          .collection("fx_rates")
+          .getFullList<{ date: string }>({ fields: "date" });
+        existing = new Set(list.map((r) => dateOnly(r.date)));
+      } catch {
+        // proceed without skip set
+      }
+    }
+
+    let saved = 0;
+    let skipped = 0;
+    try {
+      for (const r of mizuhoParsed.rates) {
+        if (existing.has(r.date)) {
+          skipped++;
+        } else {
+          await upsertFxRate(r.date, r.usd_jpy);
+          saved++;
+        }
+      }
+      setMizuhoStatus({ status: "done", saved, skipped });
+      setMizuhoFile(null);
+      setMizuhoParsed(null);
+      await reload();
+    } catch (e) {
+      setMizuhoStatus({
+        status: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (!window.confirm("このレートを削除しますか？")) return;
     try {
@@ -200,6 +274,151 @@ export function Fx() {
         確定申告レポートの JPY 換算に使う為替レートを日付別に登録します。
         該当日が無い場合は直近過去のレートが自動的に使われます (carry-forward)。
       </p>
+
+      <section
+        style={{
+          ...section,
+          border: "1px solid #2d5a3d",
+          background: "#15281c",
+        }}
+      >
+        <h2 style={h2}>
+          みずほ CSV から TTM を取り込む{" "}
+          <span style={{ color: "#5dd58c", fontSize: "0.8rem" }}>
+            (確定申告で推奨)
+          </span>
+        </h2>
+        <p style={{ color: "#aab", fontSize: "0.85rem", marginTop: 0 }}>
+          みずほ銀行が公開している{" "}
+          <code>quote.csv</code>{" "}
+          には 2002 年以降の日次 TTM (公示仲値) が 1 ファイルにまとまっています。
+          国税庁が認める銀行公示レートで、確定申告で最も使われる標準値です。
+          ブラウザでダウンロードしてから下にアップロードしてください
+          (スクレイプは行いません)。
+        </p>
+
+        <ol style={{ paddingLeft: "1.2rem", margin: "0.8rem 0", lineHeight: 1.7 }}>
+          <li>
+            <a
+              href="https://www.mizuhobank.co.jp/market/quote.csv"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "inline-block",
+                marginTop: 4,
+                background: "#2563eb",
+                color: "#fff",
+                padding: "0.4rem 0.9rem",
+                borderRadius: 6,
+                textDecoration: "none",
+                fontSize: "0.9rem",
+              }}
+            >
+              📥 quote.csv をダウンロード (新タブ)
+            </a>{" "}
+            <span style={{ color: "#888", fontSize: "0.8rem" }}>
+              約 1.1MB、Shift_JIS、全期間 (2002〜現在)
+            </span>
+          </li>
+          <li>
+            ダウンロードしたファイルを下の枠にドラッグ&ドロップ、
+            またはクリックして選択:
+            <div
+              onDragEnter={(ev) => {
+                ev.preventDefault();
+                setMizuhoDrag(true);
+              }}
+              onDragOver={(ev) => {
+                ev.preventDefault();
+                setMizuhoDrag(true);
+              }}
+              onDragLeave={() => setMizuhoDrag(false)}
+              onDrop={(ev) => {
+                ev.preventDefault();
+                setMizuhoDrag(false);
+                const file = ev.dataTransfer.files[0];
+                if (file) handleMizuhoFile(file);
+              }}
+              onClick={() => mizuhoInputRef.current?.click()}
+              style={{
+                marginTop: 8,
+                border: `2px dashed ${mizuhoDrag ? "#6cf" : "#3a5a4d"}`,
+                background: mizuhoDrag ? "#1a2030" : "#0f1a14",
+                borderRadius: 8,
+                padding: "1.2rem",
+                textAlign: "center",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                ref={mizuhoInputRef}
+                type="file"
+                accept=".csv"
+                style={{ display: "none" }}
+                onChange={(ev) => {
+                  const file = ev.target.files?.[0];
+                  if (file) handleMizuhoFile(file);
+                  ev.target.value = "";
+                }}
+              />
+              {mizuhoFile ? (
+                <div>
+                  <strong>{mizuhoFile.name}</strong>{" "}
+                  <span style={{ color: "#888" }}>
+                    ({(mizuhoFile.size / 1024).toFixed(0)} KB)
+                  </span>
+                </div>
+              ) : (
+                <span style={{ color: "#aab" }}>
+                  ここに quote.csv をドロップ
+                </span>
+              )}
+            </div>
+          </li>
+          {mizuhoParsed && mizuhoParsed.rates.length > 0 && (
+            <li>
+              <strong>{mizuhoParsed.rates.length} 件</strong> のレートを抽出
+              {mizuhoParsed.range && (
+                <>
+                  {" "}
+                  ({mizuhoParsed.range.start} 〜 {mizuhoParsed.range.end})
+                </>
+              )}
+              {mizuhoParsed.errors.length > 0 && (
+                <span style={{ color: "#f5d678", marginLeft: 6 }}>
+                  (警告 {mizuhoParsed.errors.length} 件)
+                </span>
+              )}
+              <div style={{ marginTop: 6 }}>
+                <button
+                  type="button"
+                  onClick={handleMizuhoSave}
+                  disabled={mizuhoStatus.status === "running"}
+                  style={
+                    mizuhoStatus.status === "running" ? btnDisabled : btnPrimary
+                  }
+                >
+                  {mizuhoStatus.status === "running" ? "保存中..." : "保存"}
+                </button>
+                <span style={{ marginLeft: 12, fontSize: "0.85rem", color: "#aab" }}>
+                  「既存レートを上書きしない」設定が共通で適用されます
+                </span>
+              </div>
+            </li>
+          )}
+        </ol>
+
+        {mizuhoStatus.status === "done" && (
+          <p style={{ color: "#5dd58c", marginTop: 8, fontSize: "0.9rem" }}>
+            ✅ 新規 {mizuhoStatus.saved} 件、スキップ {mizuhoStatus.skipped} 件
+          </p>
+        )}
+        {mizuhoStatus.status === "error" && (
+          <p style={{ color: "#ff6b6b", marginTop: 8, fontSize: "0.9rem" }}>
+            ❌ {mizuhoStatus.message}
+          </p>
+        )}
+      </section>
 
       <section style={section}>
         <h2 style={h2}>API から取得 (Frankfurter / ECB)</h2>
