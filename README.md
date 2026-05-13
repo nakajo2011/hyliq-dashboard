@@ -44,6 +44,16 @@ npm run dev
 - 開発サーバー: <http://localhost:5173/>
 - 起動するとトップ画面で PocketBase へのヘルスチェックとコレクションの存在確認が走ります
 
+### 開発時のチェック
+
+```sh
+cd client
+npm test            # lint + 単体テスト (61 件)
+npm run check       # lint + 型チェック (tsc) + 単体テスト の全部
+npm run test:integration   # 実 PocketBase に対する統合テスト
+npm run lint        # ESLint のみ
+```
+
 ## コレクション
 
 | 名前 | 用途 |
