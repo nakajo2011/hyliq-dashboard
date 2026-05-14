@@ -93,9 +93,11 @@ async function fetchAccountsWithCounts(): Promise<AccountRow[]> {
   return rows;
 }
 
-type EditState =
-  | { field: "name"; value: string }
-  | { field: "address"; value: string };
+// Only `name` is editable in-place. Address is fixed at account creation
+// because changing it would break the hash-based dedup (every row's hash
+// includes the account-name key) and the API sync semantics. To "change" an
+// address, delete and re-add the account.
+type EditState = { field: "name"; value: string };
 
 type SyncStatus =
   | { status: "idle" }
@@ -151,13 +153,13 @@ export function Accounts() {
     const cur = editing[id];
     if (!cur) return;
     const value = cur.value.trim();
-    if (cur.field === "name" && !value) {
+    if (!value) {
       alert("アカウント名は必須です");
       return;
     }
     setBusy(id);
     try {
-      await pb.collection("accounts").update(id, { [cur.field]: value });
+      await pb.collection("accounts").update(id, { name: value });
       cancelEdit(id);
       await reload();
     } catch (e) {
@@ -326,7 +328,7 @@ export function Accounts() {
           <thead>
             <tr style={{ borderBottom: "1px solid #2a3047", color: "#aab" }}>
               <th style={th}>アカウント名</th>
-              <th style={th}>アドレス (任意)</th>
+              <th style={th}>アドレス</th>
               <th style={{ ...th, textAlign: "right" }}>Trades</th>
               <th style={{ ...th, textAlign: "right" }}>Fundings</th>
               <th style={{ ...th, textAlign: "right" }}>Transfers</th>
@@ -337,7 +339,6 @@ export function Accounts() {
             {state.rows.map((row) => {
               const edit = editing[row.id];
               const editingName = edit?.field === "name";
-              const editingAddress = edit?.field === "address";
               return (
                 <tr key={row.id} style={{ borderBottom: "1px solid #1a1f2c" }}>
                   <td style={td}>
@@ -366,31 +367,19 @@ export function Accounts() {
                       </Link>
                     )}
                   </td>
-                  <td style={{ ...td, fontFamily: "monospace" }}>
-                    {editingAddress ? (
-                      <EditCell
-                        value={edit.value}
-                        onChange={(v) =>
-                          setEditing((prev) => ({
-                            ...prev,
-                            [row.id]: { field: "address", value: v },
-                          }))
-                        }
-                        onSave={() => save(row.id)}
-                        onCancel={() => cancelEdit(row.id)}
-                      />
-                    ) : (
-                      <span
-                        onClick={() => startEdit(row.id, "address", row.address)}
-                        style={{
-                          cursor: "pointer",
-                          color: row.address ? "#aab" : "#555",
-                        }}
-                        title="クリックで編集"
-                      >
-                        {row.address || "(未設定)"}
-                      </span>
-                    )}
+                  <td
+                    style={{
+                      ...td,
+                      fontFamily: "monospace",
+                      color: row.address ? COLORS.muted : COLORS.faint,
+                    }}
+                    title={
+                      row.address
+                        ? "アドレスは登録後に変更できません (変更には削除→再追加が必要)"
+                        : "CSV 取り込みで自動作成されたアカウントのためアドレス未設定"
+                    }
+                  >
+                    {row.address || "(未設定)"}
                   </td>
                   <td style={tdRight}>{row.trades}</td>
                   <td style={tdRight}>{row.fundings}</td>
