@@ -138,7 +138,9 @@ describe("transformLedgerUpdates", () => {
     const out = await transformLedgerUpdates(
       [
         mk({ type: "deposit", usdc: "100.0" }),
-        mk({ type: "withdraw", usdc: "-50.0", nonce: 1, fee: "1.0" }),
+        // Observed: API returns positive magnitude for withdraws too. We
+        // must negate so the CSV "outflow is negative" convention is kept.
+        mk({ type: "withdraw", usdc: "126.093316", nonce: 1, fee: "1.0" }),
         mk({ type: "accountClassTransfer", usdc: "10.0", toPerp: true }),
       ],
       "Main"
@@ -149,10 +151,22 @@ describe("transformLedgerUpdates", () => {
     expect(out.rows[0].account_value_change).toBe(100);
     expect(out.rows[0].destination).toBe("perp");
     expect(out.rows[1].action).toBe("withdraw");
+    // Negated → outflow shows as negative.
+    expect(out.rows[1].account_value_change).toBeCloseTo(-126.093316, 6);
     expect(out.rows[1].fee).toBe(1);
     expect(out.rows[2].action).toBe("accountClassTransfer");
     expect(out.rows[2].source).toBe("spot");
     expect(out.rows[2].destination).toBe("perp");
+  });
+
+  it("forces withdraw amount to negative even if API returns negative magnitude", async () => {
+    // Defensive: regardless of the API's sign convention, withdraw is always
+    // an outflow from the queried account, so the stored row must be negative.
+    const out = await transformLedgerUpdates(
+      [mk({ type: "withdraw", usdc: "-50.0", nonce: 1, fee: "0" })],
+      "Main"
+    );
+    expect(out.rows[0].account_value_change).toBe(-50);
   });
 
   it("falls back to delta.type for unknown shapes with a usdc field", async () => {

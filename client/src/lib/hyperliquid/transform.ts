@@ -156,20 +156,27 @@ function normalizeLedgerDelta(
 
   switch (d.type) {
     case "deposit":
+      // API returns a positive magnitude for deposits. Force positive in case
+      // of any edge case so we match CSV's signed convention (inflow > 0).
       return {
         action: "deposit",
         source: "",
         destination: "perp",
-        amount: num(d.usdc),
+        amount: Math.abs(num(d.usdc)),
         fee: 0,
         currency: "USDC",
       };
     case "withdraw":
+      // Observed: API returns `usdc` as a positive magnitude even for
+      // withdrawals (e.g. "126.093316" for a 126 USDC withdrawal). CSV export
+      // uses a SIGNED value where outflows are negative. Mirror that so JPY
+      // sums and the taxable-toggle treat the row as money leaving the
+      // account, and so hashes match between CSV import and API sync.
       return {
         action: "withdraw",
         source: "perp",
         destination: "",
-        amount: num(d.usdc),
+        amount: -Math.abs(num(d.usdc)),
         fee: num(d.fee),
         currency: "USDC",
       };
