@@ -841,7 +841,7 @@ interface UsePaginationResult<T> extends PagingState {
  */
 function usePagination<T>(items: T[], resetKey: unknown): UsePaginationResult<T> {
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSizeState] = useState<number | "all">(50);
+  const [pageSize, setPageSizeState] = useState<number | "all">(10);
 
   useEffect(() => {
     setPage(1);
@@ -927,6 +927,7 @@ function PaginationBar({ paging }: { paging: PagingState }) {
             marginLeft: 4,
           }}
         >
+          <option value="10">10</option>
           <option value="25">25</option>
           <option value="50">50</option>
           <option value="100">100</option>
@@ -983,15 +984,13 @@ function PaginationBar({ paging }: { paging: PagingState }) {
 function AccordionSection({
   title,
   countLabel,
-  defaultOpen = true,
   children,
 }: {
   title: string;
   countLabel: string;
-  defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(false);
   return (
     <section style={section}>
       <h2
