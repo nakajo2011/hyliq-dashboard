@@ -2,10 +2,19 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { pb } from "../lib/pb";
 import {
+  isHyperliquidAddress,
+  syncFromHyperliquid,
+  type SyncResult,
+} from "../lib/hyperliquid";
+import {
   btnDanger,
+  btnDisabled,
   btnGhost,
   btnPrimary,
+  COLORS,
   input as baseInput,
+  lbl,
+  section,
   td,
   tdRight,
   th,
@@ -73,6 +82,12 @@ type EditState =
   | { field: "name"; value: string }
   | { field: "address"; value: string };
 
+type SyncStatus =
+  | { status: "idle" }
+  | { status: "running" }
+  | { status: "done"; result: SyncResult }
+  | { status: "error"; message: string };
+
 export function Accounts() {
   const [state, setState] = useState<
     | { status: "loading" }
@@ -81,6 +96,10 @@ export function Accounts() {
   >({ status: "loading" });
   const [editing, setEditing] = useState<Record<string, EditState>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [syncStates, setSyncStates] = useState<Record<string, SyncStatus>>({});
+  const [newName, setNewName] = useState("");
+  const [newAddress, setNewAddress] = useState("");
+  const [adding, setAdding] = useState(false);
 
   const reload = async () => {
     setState({ status: "loading" });
@@ -129,6 +148,58 @@ export function Accounts() {
     }
   };
 
+  const handleAddAccount = async () => {
+    const name = newName.trim();
+    const address = newAddress.trim();
+    if (!name) {
+      alert("アカウント名は必須です");
+      return;
+    }
+    if (address && !isHyperliquidAddress(address)) {
+      alert("アドレスは 0x で始まる 40 桁の 16 進文字列で指定してください");
+      return;
+    }
+    setAdding(true);
+    try {
+      // PocketBase will 4xx if name uniqueness is violated; surface that.
+      await pb
+        .collection("accounts")
+        .create({ name, address: address || undefined });
+      setNewName("");
+      setNewAddress("");
+      await reload();
+    } catch (e) {
+      alert(`追加失敗: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleSync = async (row: AccountRow) => {
+    if (!row.address) return;
+    setSyncStates((prev) => ({ ...prev, [row.id]: { status: "running" } }));
+    try {
+      const result = await syncFromHyperliquid({
+        accountName: row.name,
+        address: row.address,
+        // PoC: last 7 days fixed
+      });
+      setSyncStates((prev) => ({
+        ...prev,
+        [row.id]: { status: "done", result },
+      }));
+      await reload();
+    } catch (e) {
+      setSyncStates((prev) => ({
+        ...prev,
+        [row.id]: {
+          status: "error",
+          message: e instanceof Error ? e.message : String(e),
+        },
+      }));
+    }
+  };
+
   const removeAccount = async (row: AccountRow) => {
     const total = row.trades + row.fundings + row.transfers;
     const label = row.name || row.address || row.id;
@@ -157,6 +228,53 @@ export function Accounts() {
         (trades / fundings / transfers) も cascade で削除されます。
       </p>
 
+      <section style={section}>
+        <h2 style={{ marginTop: 0, marginBottom: "0.6rem", fontSize: "1rem", color: COLORS.muted }}>
+          新規アカウント追加
+        </h2>
+        <p style={{ color: COLORS.subtle, fontSize: "0.82rem", marginTop: 0, marginBottom: 12 }}>
+          アドレスを登録すると、Hyperliquid 公式 API
+          から直近 7 日分の取引・Funding・入出金を「同期」ボタンで取り込めます (PoC)。
+        </p>
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            alignItems: "flex-end",
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ minWidth: 200 }}>
+            <label style={lbl}>アカウント名 (必須)</label>
+            <input
+              type="text"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              style={baseInput}
+              placeholder="Main"
+            />
+          </div>
+          <div style={{ flex: 1, minWidth: 360 }}>
+            <label style={lbl}>アドレス (任意、0x... 40 桁)</label>
+            <input
+              type="text"
+              value={newAddress}
+              onChange={(e) => setNewAddress(e.target.value)}
+              style={{ ...baseInput, width: "100%", fontFamily: "monospace" }}
+              placeholder="0x0000000000000000000000000000000000000000"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleAddAccount}
+            disabled={adding || !newName.trim()}
+            style={adding || !newName.trim() ? btnDisabled : btnPrimary}
+          >
+            {adding ? "追加中..." : "追加"}
+          </button>
+        </div>
+      </section>
+
       {state.status === "loading" && <p>読み込み中...</p>}
       {state.status === "error" && (
         <p style={{ color: "#ff6b6b" }}>❌ {state.message}</p>
@@ -164,8 +282,8 @@ export function Accounts() {
 
       {state.status === "ready" && state.rows.length === 0 && (
         <p style={{ color: "#888" }}>
-          まだアカウントがありません。<Link to="/upload">Upload</Link>{" "}
-          から CSV を取り込むと自動で登録されます。
+          まだアカウントがありません。上のフォームでアドレスを登録するか、
+          <Link to="/upload">Upload</Link> から CSV を取り込むと自動で登録されます。
         </p>
       )}
 
@@ -271,6 +389,11 @@ export function Accounts() {
                       </>
                     ) : (
                       <>
+                        <SyncButton
+                          row={row}
+                          status={syncStates[row.id] ?? { status: "idle" }}
+                          onSync={() => handleSync(row)}
+                        />
                         <button
                           type="button"
                           onClick={() => startEdit(row.id, "name", row.name)}
@@ -296,6 +419,58 @@ export function Accounts() {
         </table>
       )}
     </div>
+  );
+}
+
+function SyncButton({
+  row,
+  status,
+  onSync,
+}: {
+  row: AccountRow;
+  status: SyncStatus;
+  onSync: () => void;
+}) {
+  const hasAddress = Boolean(row.address);
+  const running = status.status === "running";
+  const disabled = !hasAddress || running;
+  return (
+    <span
+      style={{ display: "inline-flex", alignItems: "center", gap: 8, marginRight: 6 }}
+    >
+      <button
+        type="button"
+        onClick={onSync}
+        disabled={disabled}
+        style={disabled ? btnDisabled : btnPrimary}
+        title={hasAddress ? "Hyperliquid 公式 API から直近 7 日分を同期" : "アドレス未設定"}
+      >
+        {running ? "同期中..." : "同期 (7日)"}
+      </button>
+      {status.status === "done" && (
+        <span style={{ fontSize: "0.78rem", color: COLORS.muted }}>
+          ✅ 取引 +{status.result.trades.inserted}, Funding +
+          {status.result.fundings.inserted}, 入出金 +
+          {status.result.transfers.inserted}
+          {status.result.warnings.length > 0 && (
+            <span
+              title={status.result.warnings.join("\n")}
+              style={{ color: COLORS.warn, marginLeft: 4 }}
+            >
+              ⚠️ {status.result.warnings.length}
+            </span>
+          )}
+        </span>
+      )}
+      {status.status === "error" && (
+        <span
+          title={status.message}
+          style={{ fontSize: "0.78rem", color: COLORS.neg }}
+        >
+          ❌ 同期失敗
+        </span>
+      )}
+    </span>
   );
 }
 
