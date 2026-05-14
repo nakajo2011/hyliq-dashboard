@@ -192,21 +192,36 @@ function normalizeLedgerDelta(
         fee: 0,
         currency: "USDC",
       };
-    default:
-      // Catch-all for vaultDeposit/vaultWithdraw/spotTransfer/etc.
-      // We preserve the type tag and any usdc amount so the row appears in
-      // the UI even if we don't model its semantics.
-      if (d.usdc != null) {
+    case "send":
+    case "receive":
+      // Spot token transfer between addresses. Uses `amount`/`token` (not
+      // `usdc`). The sign of `amount` is from the queried user's perspective.
+      return {
+        action: d.type,
+        source: String(d.user ?? ""),
+        destination: String(d.destination ?? ""),
+        amount: num(d.amount),
+        fee: num(d.fee ?? 0),
+        currency: String(d.token ?? "USDC"),
+      };
+    default: {
+      // Catch-all for vaultDeposit/vaultWithdraw/spotTransfer/etc. We
+      // preserve the type tag and any signed amount field so the row appears
+      // in the UI even if we don't model its semantics. We look for fields
+      // in order of how Hyperliquid commonly names the balance change.
+      const rawAmount = d.usdc ?? d.usdcValue ?? d.amount;
+      if (rawAmount != null) {
         return {
           action: d.type,
           source: "",
           destination: "",
-          amount: num(d.usdc),
+          amount: num(rawAmount),
           fee: num((d as Record<string, unknown>).fee ?? 0),
-          currency: "USDC",
+          currency: String((d as Record<string, unknown>).token ?? "USDC"),
         };
       }
       return null;
+    }
   }
 }
 

@@ -165,6 +165,50 @@ describe("transformLedgerUpdates", () => {
     expect(out.rows[0].account_value_change).toBe(5);
   });
 
+  it("maps a 'send' spot transfer using amount+token (not usdc)", async () => {
+    const out = await transformLedgerUpdates(
+      [
+        mk({
+          type: "send",
+          user: "0x6b9e773128f453f5c2c60935ee2de2cbc5390a24",
+          destination: "0x6b94d8192ed3691a2b66c942fd1775022cbdb5b4",
+          sourceDex: "spot",
+          destinationDex: "",
+          token: "USDC",
+          amount: "98.0",
+          usdcValue: "98.0",
+          fee: "0.0",
+        } as unknown as HlLedgerUpdate["delta"]),
+      ],
+      "Main"
+    );
+    expect(out.skippedUnknown).toBe(0);
+    expect(out.rows).toHaveLength(1);
+    expect(out.rows[0].action).toBe("send");
+    expect(out.rows[0].account_value_change).toBe(98);
+    expect(out.rows[0].source).toBe(
+      "0x6b9e773128f453f5c2c60935ee2de2cbc5390a24"
+    );
+    expect(out.rows[0].destination).toBe(
+      "0x6b94d8192ed3691a2b66c942fd1775022cbdb5b4"
+    );
+    expect(out.rows[0].currency).toBe("USDC");
+  });
+
+  it("catch-all also recognizes usdcValue and amount as the balance change", async () => {
+    const out = await transformLedgerUpdates(
+      [
+        mk({
+          type: "someNewType",
+          amount: "12.5",
+        } as unknown as HlLedgerUpdate["delta"]),
+      ],
+      "Main"
+    );
+    expect(out.skippedUnknown).toBe(0);
+    expect(out.rows[0].account_value_change).toBe(12.5);
+  });
+
   it("skips updates with no usdc and unknown type", async () => {
     const out = await transformLedgerUpdates(
       [mk({ type: "mysteryEvent" } as unknown as HlLedgerUpdate["delta"])],
