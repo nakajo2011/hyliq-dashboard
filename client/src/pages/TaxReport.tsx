@@ -4,6 +4,7 @@ import { pb } from "../lib/pb";
 import {
   btnDisabled,
   btnPrimary,
+  COLORS,
   h2,
   table,
   td,
@@ -277,6 +278,11 @@ function ReportView({
     [transfers, year]
   );
 
+  // Per-section pagination. Reset to page 1 when the selected year changes.
+  const tradePaging = usePagination(yearTrades, year);
+  const fundingPaging = usePagination(yearFundings, year);
+  const transferPaging = usePagination(yearTransfers, year);
+
   const [editingDate, setEditingDate] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
@@ -445,12 +451,16 @@ function ReportView({
         )}
       </section>
 
-      <section style={section}>
-        <h2 style={h2}>取引明細 ({yearTrades.length} 件)</h2>
+      <AccordionSection
+        title="取引明細"
+        countLabel={`${yearTrades.length} 件`}
+      >
         {yearTrades.length === 0 ? (
           <p style={{ color: "#666" }}>この年度に取引はありません</p>
         ) : (
-          <table style={table}>
+          <>
+            <PaginationBar paging={tradePaging} />
+            <table style={table}>
             <thead>
               <tr style={trHead}>
                 <th style={th}>日付</th>
@@ -465,7 +475,7 @@ function ReportView({
               </tr>
             </thead>
             <tbody>
-              {yearTrades.map((t) => {
+              {tradePaging.paged.map((t) => {
                 const date = dateKeyJst(t.time);
                 const fx = lookup(date);
                 const jpy = fx ? t.closed_pnl * fx.rate : null;
@@ -512,18 +522,21 @@ function ReportView({
                 );
               })}
             </tbody>
-          </table>
+            </table>
+          </>
         )}
-      </section>
+      </AccordionSection>
 
-      <section style={section}>
-        <h2 style={h2}>
-          ファンディング明細 ({yearFundings.length} 件 — 全件が課税対象)
-        </h2>
+      <AccordionSection
+        title="ファンディング明細"
+        countLabel={`${yearFundings.length} 件 — 全件が課税対象`}
+      >
         {yearFundings.length === 0 ? (
           <p style={{ color: "#666" }}>この年度にファンディングはありません</p>
         ) : (
-          <table style={table}>
+          <>
+            <PaginationBar paging={fundingPaging} />
+            <table style={table}>
             <thead>
               <tr style={trHead}>
                 <th style={th}>日付</th>
@@ -536,7 +549,7 @@ function ReportView({
               </tr>
             </thead>
             <tbody>
-              {yearFundings.map((f) => {
+              {fundingPaging.paged.map((f) => {
                 const date = dateKeyJst(f.time);
                 const fx = lookup(date);
                 const jpy = fx ? f.payment * fx.rate : null;
@@ -570,15 +583,15 @@ function ReportView({
                 );
               })}
             </tbody>
-          </table>
+            </table>
+          </>
         )}
-      </section>
+      </AccordionSection>
 
-      <section style={section}>
-        <h2 style={h2}>
-          入出金明細 ({yearTransfers.length} 件 / 課税対象{" "}
-          {yearTransfers.filter((t) => t.taxable).length} 件)
-        </h2>
+      <AccordionSection
+        title="入出金明細"
+        countLabel={`${yearTransfers.length} 件 / 課税対象 ${yearTransfers.filter((t) => t.taxable).length} 件`}
+      >
         <p
           style={{
             color: "#888",
@@ -595,7 +608,9 @@ function ReportView({
         {yearTransfers.length === 0 ? (
           <p style={{ color: "#666" }}>この年度に入出金はありません</p>
         ) : (
-          <table style={table}>
+          <>
+            <PaginationBar paging={transferPaging} />
+            <table style={table}>
             <thead>
               <tr style={trHead}>
                 <th style={th}>日付</th>
@@ -610,7 +625,7 @@ function ReportView({
               </tr>
             </thead>
             <tbody>
-              {yearTransfers.map((tr) => {
+              {transferPaging.paged.map((tr) => {
                 const date = dateKeyJst(tr.time);
                 const fx = lookup(date);
                 const jpy =
@@ -668,9 +683,10 @@ function ReportView({
                 );
               })}
             </tbody>
-          </table>
+            </table>
+          </>
         )}
-      </section>
+      </AccordionSection>
 
       <p style={{ color: "#888", fontSize: "0.8rem", marginTop: 12 }}>
         USD/JPY 列をクリックすると、その日のレートを直接登録できます
@@ -801,6 +817,213 @@ function JpyCell({
         ? amount.toLocaleString(undefined, { maximumFractionDigits: 0 })
         : placeholder}
     </td>
+  );
+}
+
+interface PagingState {
+  page: number;
+  totalPages: number;
+  pageSize: number | "all";
+  total: number;
+  startIdx: number;
+  endIdx: number;
+  setPage: (p: number) => void;
+  setPageSize: (s: number | "all") => void;
+}
+
+interface UsePaginationResult<T> extends PagingState {
+  paged: T[];
+}
+
+/**
+ * Slice an array into pages. `resetKey` resets the current page to 1 when its
+ * identity changes (used to reset on year switch).
+ */
+function usePagination<T>(items: T[], resetKey: unknown): UsePaginationResult<T> {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSizeState] = useState<number | "all">(50);
+
+  useEffect(() => {
+    setPage(1);
+  }, [resetKey]);
+
+  const setPageSize = (size: number | "all") => {
+    setPageSizeState(size);
+    setPage(1);
+  };
+
+  const total = items.length;
+  const isAll = pageSize === "all";
+  const totalPages = isAll ? 1 : Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const startIdx = isAll || total === 0 ? 0 : (safePage - 1) * pageSize;
+  const endIdx = isAll ? total : Math.min(startIdx + pageSize, total);
+  const paged = isAll ? items : items.slice(startIdx, endIdx);
+
+  return {
+    paged,
+    page: safePage,
+    totalPages,
+    pageSize,
+    total,
+    startIdx,
+    endIdx,
+    setPage,
+    setPageSize,
+  };
+}
+
+function PaginationBar({ paging }: { paging: PagingState }) {
+  const {
+    page,
+    totalPages,
+    pageSize,
+    total,
+    startIdx,
+    endIdx,
+    setPage,
+    setPageSize,
+  } = paging;
+  if (total === 0) return null;
+  const navBtn = (disabled: boolean): React.CSSProperties => ({
+    background: "transparent",
+    color: disabled ? "#555" : COLORS.muted,
+    border: `1px solid ${COLORS.border}`,
+    borderRadius: 4,
+    padding: "0.15rem 0.45rem",
+    cursor: disabled ? "not-allowed" : "pointer",
+    minWidth: 26,
+    fontSize: "0.85rem",
+  });
+  const atFirst = page === 1;
+  const atLast = page >= totalPages;
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 8,
+        alignItems: "center",
+        justifyContent: "flex-end",
+        flexWrap: "wrap",
+        marginBottom: 8,
+        fontSize: "0.82rem",
+        color: COLORS.muted,
+      }}
+    >
+      <label>
+        表示件数{" "}
+        <select
+          value={pageSize}
+          onChange={(e) => {
+            const v = e.target.value;
+            setPageSize(v === "all" ? "all" : Number(v));
+          }}
+          style={{
+            background: COLORS.inputBg,
+            color: COLORS.text,
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: 4,
+            padding: "0.15rem 0.3rem",
+            marginLeft: 4,
+          }}
+        >
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+          <option value="all">全件</option>
+        </select>
+      </label>
+      <span style={{ fontVariantNumeric: "tabular-nums" }}>
+        {(startIdx + 1).toLocaleString()} - {endIdx.toLocaleString()} /{" "}
+        {total.toLocaleString()} 件
+      </span>
+      <button
+        type="button"
+        onClick={() => setPage(1)}
+        disabled={atFirst}
+        style={navBtn(atFirst)}
+        title="先頭ページ"
+      >
+        «
+      </button>
+      <button
+        type="button"
+        onClick={() => setPage(page - 1)}
+        disabled={atFirst}
+        style={navBtn(atFirst)}
+        title="前のページ"
+      >
+        ‹
+      </button>
+      <span style={{ fontVariantNumeric: "tabular-nums" }}>
+        {page} / {totalPages}
+      </span>
+      <button
+        type="button"
+        onClick={() => setPage(page + 1)}
+        disabled={atLast}
+        style={navBtn(atLast)}
+        title="次のページ"
+      >
+        ›
+      </button>
+      <button
+        type="button"
+        onClick={() => setPage(totalPages)}
+        disabled={atLast}
+        style={navBtn(atLast)}
+        title="末尾ページ"
+      >
+        »
+      </button>
+    </div>
+  );
+}
+
+function AccordionSection({
+  title,
+  countLabel,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  countLabel: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section style={section}>
+      <h2
+        style={{
+          ...h2,
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          userSelect: "none",
+          marginBottom: open ? "0.6rem" : 0,
+        }}
+        onClick={() => setOpen((o) => !o)}
+        role="button"
+        aria-expanded={open}
+      >
+        <span style={{ fontSize: "0.75em", color: COLORS.muted }}>
+          {open ? "▼" : "▶"}
+        </span>
+        <span style={{ color: COLORS.text }}>{title}</span>
+        <span
+          style={{
+            color: COLORS.subtle,
+            fontWeight: 400,
+            fontSize: "0.85em",
+          }}
+        >
+          ({countLabel})
+        </span>
+      </h2>
+      {open && children}
+    </section>
   );
 }
 
