@@ -23,19 +23,35 @@ import {
 // Accounts page-specific input style: same as base but stretches to fill cell.
 const inputStyle: React.CSSProperties = { ...baseInput, width: "100%" };
 
-/** "YYYY-MM-DD" for today − 7 days in JST. Used as the default sync start. */
-function defaultStartDate(): string {
-  const ms = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const jst = new Date(ms + 9 * 60 * 60 * 1000);
+/** "YYYY-MM" for the current month in JST. Used as the default sync month. */
+function defaultSyncMonth(): string {
+  const jst = new Date(Date.now() + 9 * 60 * 60 * 1000);
   const y = jst.getUTCFullYear();
   const m = String(jst.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(jst.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+  return `${y}-${m}`;
 }
 
-/** Treat "YYYY-MM-DD" as JST midnight, return epoch ms (NaN if malformed). */
-function jstDateToMs(date: string): number {
-  return Date.parse(`${date}T00:00:00+09:00`);
+/**
+ * Map a "YYYY-MM" month string to its [start, end) JST boundaries in ms.
+ * `start` is the first day of the month at 00:00 JST; `end` is the first
+ * day of the *following* month at 00:00 JST (exclusive upper bound).
+ * Returns null if the input is malformed.
+ */
+function monthToRangeMs(
+  yyyymm: string
+): { startMs: number; endMs: number } | null {
+  const m = /^(\d{4})-(\d{2})$/.exec(yyyymm);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return null;
+  const startMs = Date.parse(`${yyyymm}-01T00:00:00+09:00`);
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextMm = String(nextMonth).padStart(2, "0");
+  const endMs = Date.parse(`${nextYear}-${nextMm}-01T00:00:00+09:00`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+  return { startMs, endMs };
 }
 
 interface AccountRow {
@@ -117,10 +133,8 @@ export function Accounts() {
   const [newName, setNewName] = useState("");
   const [newAddress, setNewAddress] = useState("");
   const [adding, setAdding] = useState(false);
-  /** Per-row start date (YYYY-MM-DD, JST) for the sync. End = start + 7 days. */
-  const [syncStartDates, setSyncStartDates] = useState<Record<string, string>>(
-    {}
-  );
+  /** Per-row sync target month ("YYYY-MM", JST). Window = the entire month. */
+  const [syncMonths, setSyncMonths] = useState<Record<string, string>>({});
 
   const reload = async () => {
     setState({ status: "loading" });
@@ -198,20 +212,19 @@ export function Accounts() {
 
   const handleSync = async (row: AccountRow) => {
     if (!row.address) return;
-    const startDate = syncStartDates[row.id] ?? defaultStartDate();
-    const startTime = jstDateToMs(startDate);
-    if (!Number.isFinite(startTime)) {
-      alert("開始日が不正です (YYYY-MM-DD 形式で指定してください)");
+    const month = syncMonths[row.id] ?? defaultSyncMonth();
+    const range = monthToRangeMs(month);
+    if (!range) {
+      alert("対象月が不正です (YYYY-MM 形式で指定してください)");
       return;
     }
-    const endTime = startTime + 7 * 24 * 60 * 60 * 1000;
     setSyncStates((prev) => ({ ...prev, [row.id]: { status: "running" } }));
     try {
       const result = await syncFromHyperliquid({
         accountName: row.name,
         address: row.address,
-        startTime,
-        endTime,
+        startTime: range.startMs,
+        endTime: range.endMs,
       });
       setSyncStates((prev) => ({
         ...prev,
@@ -408,11 +421,11 @@ export function Accounts() {
                         <SyncButton
                           row={row}
                           status={syncStates[row.id] ?? { status: "idle" }}
-                          startDate={
-                            syncStartDates[row.id] ?? defaultStartDate()
+                          month={
+                            syncMonths[row.id] ?? defaultSyncMonth()
                           }
-                          onChangeStartDate={(v) =>
-                            setSyncStartDates((prev) => ({
+                          onChangeMonth={(v) =>
+                            setSyncMonths((prev) => ({
                               ...prev,
                               [row.id]: v,
                             }))
@@ -450,14 +463,14 @@ export function Accounts() {
 function SyncButton({
   row,
   status,
-  startDate,
-  onChangeStartDate,
+  month,
+  onChangeMonth,
   onSync,
 }: {
   row: AccountRow;
   status: SyncStatus;
-  startDate: string;
-  onChangeStartDate: (v: string) => void;
+  month: string;
+  onChangeMonth: (v: string) => void;
   onSync: () => void;
 }) {
   const hasAddress = Boolean(row.address);
@@ -468,12 +481,12 @@ function SyncButton({
       style={{ display: "inline-flex", alignItems: "center", gap: 6, marginRight: 6 }}
     >
       <input
-        type="date"
-        value={startDate}
+        type="month"
+        value={month}
         disabled={!hasAddress || running}
-        onChange={(e) => onChangeStartDate(e.target.value)}
+        onChange={(e) => onChangeMonth(e.target.value)}
         style={{ ...baseInput, padding: "0.25rem 0.4rem", fontSize: "0.82rem" }}
-        title="同期の開始日 (JST)。終了日は +7 日"
+        title="同期の対象月 (JST)。月初〜月末を取得"
       />
       <button
         type="button"
@@ -482,11 +495,11 @@ function SyncButton({
         style={disabled ? btnDisabled : btnPrimary}
         title={
           hasAddress
-            ? `${startDate} から 7 日分を Hyperliquid 公式 API から同期`
+            ? `${month} の 1 ヶ月分を Hyperliquid 公式 API から同期`
             : "アドレス未設定"
         }
       >
-        {running ? "同期中..." : "同期 (+7日)"}
+        {running ? "同期中..." : "同期 (1ヶ月)"}
       </button>
       {status.status === "done" && (
         <span style={{ fontSize: "0.78rem", color: COLORS.muted }}>
