@@ -23,6 +23,21 @@ import {
 // Accounts page-specific input style: same as base but stretches to fill cell.
 const inputStyle: React.CSSProperties = { ...baseInput, width: "100%" };
 
+/** "YYYY-MM-DD" for today − 7 days in JST. Used as the default sync start. */
+function defaultStartDate(): string {
+  const ms = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const jst = new Date(ms + 9 * 60 * 60 * 1000);
+  const y = jst.getUTCFullYear();
+  const m = String(jst.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(jst.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/** Treat "YYYY-MM-DD" as JST midnight, return epoch ms (NaN if malformed). */
+function jstDateToMs(date: string): number {
+  return Date.parse(`${date}T00:00:00+09:00`);
+}
+
 interface AccountRow {
   id: string;
   name: string;
@@ -100,6 +115,10 @@ export function Accounts() {
   const [newName, setNewName] = useState("");
   const [newAddress, setNewAddress] = useState("");
   const [adding, setAdding] = useState(false);
+  /** Per-row start date (YYYY-MM-DD, JST) for the sync. End = start + 7 days. */
+  const [syncStartDates, setSyncStartDates] = useState<Record<string, string>>(
+    {}
+  );
 
   const reload = async () => {
     setState({ status: "loading" });
@@ -177,12 +196,20 @@ export function Accounts() {
 
   const handleSync = async (row: AccountRow) => {
     if (!row.address) return;
+    const startDate = syncStartDates[row.id] ?? defaultStartDate();
+    const startTime = jstDateToMs(startDate);
+    if (!Number.isFinite(startTime)) {
+      alert("開始日が不正です (YYYY-MM-DD 形式で指定してください)");
+      return;
+    }
+    const endTime = startTime + 7 * 24 * 60 * 60 * 1000;
     setSyncStates((prev) => ({ ...prev, [row.id]: { status: "running" } }));
     try {
       const result = await syncFromHyperliquid({
         accountName: row.name,
         address: row.address,
-        // PoC: last 7 days fixed
+        startTime,
+        endTime,
       });
       setSyncStates((prev) => ({
         ...prev,
@@ -392,6 +419,15 @@ export function Accounts() {
                         <SyncButton
                           row={row}
                           status={syncStates[row.id] ?? { status: "idle" }}
+                          startDate={
+                            syncStartDates[row.id] ?? defaultStartDate()
+                          }
+                          onChangeStartDate={(v) =>
+                            setSyncStartDates((prev) => ({
+                              ...prev,
+                              [row.id]: v,
+                            }))
+                          }
                           onSync={() => handleSync(row)}
                         />
                         <button
@@ -425,10 +461,14 @@ export function Accounts() {
 function SyncButton({
   row,
   status,
+  startDate,
+  onChangeStartDate,
   onSync,
 }: {
   row: AccountRow;
   status: SyncStatus;
+  startDate: string;
+  onChangeStartDate: (v: string) => void;
   onSync: () => void;
 }) {
   const hasAddress = Boolean(row.address);
@@ -436,16 +476,28 @@ function SyncButton({
   const disabled = !hasAddress || running;
   return (
     <span
-      style={{ display: "inline-flex", alignItems: "center", gap: 8, marginRight: 6 }}
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, marginRight: 6 }}
     >
+      <input
+        type="date"
+        value={startDate}
+        disabled={!hasAddress || running}
+        onChange={(e) => onChangeStartDate(e.target.value)}
+        style={{ ...baseInput, padding: "0.25rem 0.4rem", fontSize: "0.82rem" }}
+        title="同期の開始日 (JST)。終了日は +7 日"
+      />
       <button
         type="button"
         onClick={onSync}
         disabled={disabled}
         style={disabled ? btnDisabled : btnPrimary}
-        title={hasAddress ? "Hyperliquid 公式 API から直近 7 日分を同期" : "アドレス未設定"}
+        title={
+          hasAddress
+            ? `${startDate} から 7 日分を Hyperliquid 公式 API から同期`
+            : "アドレス未設定"
+        }
       >
-        {running ? "同期中..." : "同期 (7日)"}
+        {running ? "同期中..." : "同期 (+7日)"}
       </button>
       {status.status === "done" && (
         <span style={{ fontSize: "0.78rem", color: COLORS.muted }}>
