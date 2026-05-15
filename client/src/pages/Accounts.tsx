@@ -1,15 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import { pb } from "../lib/pb";
+import { AccountCreateModal } from "../components/AccountCreateModal";
 import { AccountCsvImportModal } from "../components/AccountCsvImportModal";
-import { AccountFormModal } from "../components/AccountFormModal";
 import { AccountSyncModal } from "../components/AccountSyncModal";
 import {
-  btnDanger,
   btnGhost,
   btnGhostDisabled,
   btnPrimary,
   COLORS,
+  input as baseInput,
   td,
   tdRight,
   th,
@@ -76,9 +76,40 @@ function shortAddress(addr: string): string {
   return `${addr.slice(0, 8)}…${addr.slice(-6)}`;
 }
 
+const iconDangerBtn: CSSProperties = {
+  background: "transparent",
+  border: `1px solid ${COLORS.dangerBorder}`,
+  borderRadius: 6,
+  padding: "0.35rem 0.45rem",
+  cursor: "pointer",
+  color: COLORS.neg,
+  display: "inline-flex",
+  alignItems: "center",
+};
+
+function TrashIcon() {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </svg>
+  );
+}
+
 type ModalState =
   | { type: "create" }
-  | { type: "edit"; account: AccountRow }
   | { type: "sync"; account: AccountRow }
   | { type: "csv"; account: AccountRow };
 
@@ -90,6 +121,13 @@ export function Accounts() {
   >({ status: "loading" });
   const [busy, setBusy] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState | null>(null);
+
+  // Inline account-name editing.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  // Set just before blur when the user pressed Escape, so the shared blur
+  // handler can tell "cancel" apart from "commit".
+  const escapeRef = useRef(false);
 
   const reload = async () => {
     try {
@@ -106,6 +144,29 @@ export function Accounts() {
   useEffect(() => {
     reload();
   }, []);
+
+  const startNameEdit = (row: AccountRow) => {
+    escapeRef.current = false;
+    setEditValue(row.name);
+    setEditingId(row.id);
+  };
+
+  const commitName = async (id: string, original: string) => {
+    if (escapeRef.current) {
+      escapeRef.current = false;
+      setEditingId(null);
+      return;
+    }
+    const value = editValue.trim();
+    setEditingId(null);
+    if (!value || value === original) return;
+    try {
+      await pb.collection("accounts").update(id, { name: value });
+      await reload();
+    } catch (e) {
+      alert(`保存失敗: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   const removeAccount = async (row: AccountRow) => {
     const total = row.trades + row.fundings + row.transfers;
@@ -149,7 +210,7 @@ export function Accounts() {
       </div>
       <p style={{ color: "#888" }}>
         アカウントを登録し、各行の「同期」または「CSV取込」で取引データを
-        取得します。各アカウントの収支は{" "}
+        取得します。アカウント名はクリックで編集できます。各アカウントの収支は{" "}
         <Link to="/" style={{ color: "#6cf" }}>
           収支
         </Link>{" "}
@@ -191,8 +252,41 @@ export function Accounts() {
               const hasAddress = Boolean(row.address);
               return (
                 <tr key={row.id} style={{ borderBottom: "1px solid #1a1f2c" }}>
-                  <td style={{ ...td, color: COLORS.text, fontWeight: 500 }}>
-                    {row.name}
+                  <td style={td}>
+                    {editingId === row.id ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") e.currentTarget.blur();
+                          if (e.key === "Escape") {
+                            escapeRef.current = true;
+                            e.currentTarget.blur();
+                          }
+                        }}
+                        onBlur={() => commitName(row.id, row.name)}
+                        style={{
+                          ...baseInput,
+                          width: "100%",
+                          padding: "0.3rem 0.5rem",
+                        }}
+                      />
+                    ) : (
+                      <span
+                        onClick={() => startNameEdit(row)}
+                        title="クリックして名前を編集"
+                        style={{
+                          color: COLORS.text,
+                          fontWeight: 500,
+                          cursor: "pointer",
+                          borderBottom: "1px dotted #555",
+                        }}
+                      >
+                        {row.name}
+                      </span>
+                    )}
                   </td>
                   <td
                     style={{
@@ -217,6 +311,7 @@ export function Accounts() {
                         display: "flex",
                         gap: 6,
                         justifyContent: "flex-end",
+                        alignItems: "center",
                         flexWrap: "wrap",
                       }}
                     >
@@ -243,18 +338,12 @@ export function Accounts() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setModal({ type: "edit", account: row })}
-                        style={btnGhost}
-                      >
-                        編集
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => removeAccount(row)}
                         disabled={busy === row.id}
-                        style={btnDanger}
+                        style={iconDangerBtn}
+                        title="このアカウントを削除"
                       >
-                        削除
+                        <TrashIcon />
                       </button>
                     </div>
                   </td>
@@ -266,16 +355,9 @@ export function Accounts() {
       )}
 
       {modal?.type === "create" && (
-        <AccountFormModal
+        <AccountCreateModal
           onClose={() => setModal(null)}
-          onSaved={reload}
-        />
-      )}
-      {modal?.type === "edit" && (
-        <AccountFormModal
-          account={modal.account}
-          onClose={() => setModal(null)}
-          onSaved={reload}
+          onCreated={reload}
         />
       )}
       {modal?.type === "sync" && (
