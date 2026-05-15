@@ -2,58 +2,18 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { pb } from "../lib/pb";
 import { AccountCsvImportModal } from "../components/AccountCsvImportModal";
-import {
-  isHyperliquidAddress,
-  syncFromHyperliquid,
-  type SyncResult,
-} from "../lib/hyperliquid";
+import { AccountFormModal } from "../components/AccountFormModal";
+import { AccountSyncModal } from "../components/AccountSyncModal";
 import {
   btnDanger,
-  btnDisabled,
   btnGhost,
+  btnGhostDisabled,
   btnPrimary,
   COLORS,
-  input as baseInput,
-  lbl,
-  section,
   td,
   tdRight,
   th,
 } from "../styles";
-
-// Accounts page-specific input style: same as base but stretches to fill cell.
-const inputStyle: React.CSSProperties = { ...baseInput, width: "100%" };
-
-/** "YYYY-MM" for the current month in JST. Used as the default sync month. */
-function defaultSyncMonth(): string {
-  const jst = new Date(Date.now() + 9 * 60 * 60 * 1000);
-  const y = jst.getUTCFullYear();
-  const m = String(jst.getUTCMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
-}
-
-/**
- * Map a "YYYY-MM" month string to its [start, end) JST boundaries in ms.
- * `start` is the first day of the month at 00:00 JST; `end` is the first
- * day of the *following* month at 00:00 JST (exclusive upper bound).
- * Returns null if the input is malformed.
- */
-function monthToRangeMs(
-  yyyymm: string
-): { startMs: number; endMs: number } | null {
-  const m = /^(\d{4})-(\d{2})$/.exec(yyyymm);
-  if (!m) return null;
-  const year = Number(m[1]);
-  const month = Number(m[2]);
-  if (month < 1 || month > 12) return null;
-  const startMs = Date.parse(`${yyyymm}-01T00:00:00+09:00`);
-  const nextYear = month === 12 ? year + 1 : year;
-  const nextMonth = month === 12 ? 1 : month + 1;
-  const nextMm = String(nextMonth).padStart(2, "0");
-  const endMs = Date.parse(`${nextYear}-${nextMm}-01T00:00:00+09:00`);
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
-  return { startMs, endMs };
-}
 
 interface AccountRow {
   id: string;
@@ -110,17 +70,17 @@ async function fetchAccountsWithCounts(): Promise<AccountRow[]> {
   return rows;
 }
 
-// Only `name` is editable in-place. Address is fixed at account creation
-// because changing it would break the hash-based dedup (every row's hash
-// includes the account-name key) and the API sync semantics. To "change" an
-// address, delete and re-add the account.
-type EditState = { field: "name"; value: string };
+/** Abbreviate a 0x… address for table display; full value goes in `title`. */
+function shortAddress(addr: string): string {
+  if (addr.length <= 16) return addr;
+  return `${addr.slice(0, 8)}…${addr.slice(-6)}`;
+}
 
-type SyncStatus =
-  | { status: "idle" }
-  | { status: "running" }
-  | { status: "done"; result: SyncResult }
-  | { status: "error"; message: string };
+type ModalState =
+  | { type: "create" }
+  | { type: "edit"; account: AccountRow }
+  | { type: "sync"; account: AccountRow }
+  | { type: "csv"; account: AccountRow };
 
 export function Accounts() {
   const [state, setState] = useState<
@@ -128,21 +88,10 @@ export function Accounts() {
     | { status: "ready"; rows: AccountRow[] }
     | { status: "error"; message: string }
   >({ status: "loading" });
-  const [editing, setEditing] = useState<Record<string, EditState>>({});
   const [busy, setBusy] = useState<string | null>(null);
-  const [syncStates, setSyncStates] = useState<Record<string, SyncStatus>>({});
-  const [newName, setNewName] = useState("");
-  const [newAddress, setNewAddress] = useState("");
-  const [adding, setAdding] = useState(false);
-  /** Per-row sync target month ("YYYY-MM", JST). Window = the entire month. */
-  const [syncMonths, setSyncMonths] = useState<Record<string, string>>({});
-  /** Account currently shown in the CSV import modal (null = closed). */
-  const [csvModalAccount, setCsvModalAccount] = useState<AccountRow | null>(
-    null
-  );
+  const [modal, setModal] = useState<ModalState | null>(null);
 
   const reload = async () => {
-    setState({ status: "loading" });
     try {
       const rows = await fetchAccountsWithCounts();
       setState({ status: "ready", rows });
@@ -157,95 +106,6 @@ export function Accounts() {
   useEffect(() => {
     reload();
   }, []);
-
-  const startEdit = (id: string, field: EditState["field"], value: string) => {
-    setEditing((prev) => ({ ...prev, [id]: { field, value } }));
-  };
-  const cancelEdit = (id: string) => {
-    setEditing((prev) => {
-      const n = { ...prev };
-      delete n[id];
-      return n;
-    });
-  };
-  const save = async (id: string) => {
-    const cur = editing[id];
-    if (!cur) return;
-    const value = cur.value.trim();
-    if (!value) {
-      alert("アカウント名は必須です");
-      return;
-    }
-    setBusy(id);
-    try {
-      await pb.collection("accounts").update(id, { name: value });
-      cancelEdit(id);
-      await reload();
-    } catch (e) {
-      alert(`保存失敗: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleAddAccount = async () => {
-    const name = newName.trim();
-    const address = newAddress.trim();
-    if (!name) {
-      alert("アカウント名は必須です");
-      return;
-    }
-    if (address && !isHyperliquidAddress(address)) {
-      alert("アドレスは 0x で始まる 40 桁の 16 進文字列で指定してください");
-      return;
-    }
-    setAdding(true);
-    try {
-      // PocketBase will 4xx if name uniqueness is violated; surface that.
-      await pb
-        .collection("accounts")
-        .create({ name, address: address || undefined });
-      setNewName("");
-      setNewAddress("");
-      await reload();
-    } catch (e) {
-      alert(`追加失敗: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  const handleSync = async (row: AccountRow) => {
-    if (!row.address) return;
-    const month = syncMonths[row.id] ?? defaultSyncMonth();
-    const range = monthToRangeMs(month);
-    if (!range) {
-      alert("対象月が不正です (YYYY-MM 形式で指定してください)");
-      return;
-    }
-    setSyncStates((prev) => ({ ...prev, [row.id]: { status: "running" } }));
-    try {
-      const result = await syncFromHyperliquid({
-        accountName: row.name,
-        address: row.address,
-        startTime: range.startMs,
-        endTime: range.endMs,
-      });
-      setSyncStates((prev) => ({
-        ...prev,
-        [row.id]: { status: "done", result },
-      }));
-      await reload();
-    } catch (e) {
-      setSyncStates((prev) => ({
-        ...prev,
-        [row.id]: {
-          status: "error",
-          message: e instanceof Error ? e.message : String(e),
-        },
-      }));
-    }
-  };
 
   const removeAccount = async (row: AccountRow) => {
     const total = row.trades + row.fundings + row.transfers;
@@ -269,64 +129,32 @@ export function Accounts() {
 
   return (
     <div>
-      <h1 style={{ marginTop: 0 }}>アカウント</h1>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "1rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <h1 style={{ margin: 0 }}>アカウント</h1>
+        <button
+          type="button"
+          onClick={() => setModal({ type: "create" })}
+          style={btnPrimary}
+        >
+          ＋ 新規追加
+        </button>
+      </div>
       <p style={{ color: "#888" }}>
-        まずアカウントを登録し、各アカウントに対して「同期」または「CSV取込」で
-        取引データを取得します。各アカウントの収支は{" "}
+        アカウントを登録し、各行の「同期」または「CSV取込」で取引データを
+        取得します。各アカウントの収支は{" "}
         <Link to="/" style={{ color: "#6cf" }}>
           収支
         </Link>{" "}
-        ページで確認できます。アカウント名はクリックで編集可。削除時は関連データ
-        (trades / fundings / transfers) も cascade で削除されます。
+        ページで確認できます。
       </p>
-
-      <section style={section}>
-        <h2 style={{ marginTop: 0, marginBottom: "0.6rem", fontSize: "1rem", color: COLORS.muted }}>
-          新規アカウント追加
-        </h2>
-        <p style={{ color: COLORS.subtle, fontSize: "0.82rem", marginTop: 0, marginBottom: 12 }}>
-          アドレスを登録すると、登録後に各行の「同期」ボタンで Hyperliquid
-          公式 API から月単位で取引データを取得できます。アドレスなしでも作成でき、
-          その場合は「CSV取込」のみ利用できます。
-        </p>
-        <div
-          style={{
-            display: "flex",
-            gap: 12,
-            alignItems: "flex-end",
-            flexWrap: "wrap",
-          }}
-        >
-          <div style={{ minWidth: 200 }}>
-            <label style={lbl}>アカウント名 (必須)</label>
-            <input
-              type="text"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              style={baseInput}
-              placeholder="Main"
-            />
-          </div>
-          <div style={{ flex: 1, minWidth: 360 }}>
-            <label style={lbl}>アドレス (任意、0x... 40 桁)</label>
-            <input
-              type="text"
-              value={newAddress}
-              onChange={(e) => setNewAddress(e.target.value)}
-              style={{ ...baseInput, width: "100%", fontFamily: "monospace" }}
-              placeholder="0x0000000000000000000000000000000000000000"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={handleAddAccount}
-            disabled={adding || !newName.trim()}
-            style={adding || !newName.trim() ? btnDisabled : btnPrimary}
-          >
-            {adding ? "追加中..." : "追加"}
-          </button>
-        </div>
-      </section>
 
       {state.status === "loading" && <p>読み込み中...</p>}
       {state.status === "error" && (
@@ -334,8 +162,8 @@ export function Accounts() {
       )}
 
       {state.status === "ready" && state.rows.length === 0 && (
-        <p style={{ color: "#888" }}>
-          まだアカウントがありません。上のフォームで作成してください。
+        <p style={{ color: "#888", marginTop: "2rem" }}>
+          まだアカウントがありません。右上の「＋ 新規追加」から作成してください。
         </p>
       )}
 
@@ -352,114 +180,83 @@ export function Accounts() {
             <tr style={{ borderBottom: "1px solid #2a3047", color: "#aab" }}>
               <th style={th}>アカウント名</th>
               <th style={th}>アドレス</th>
-              <th style={{ ...th, textAlign: "right" }}>Trades</th>
-              <th style={{ ...th, textAlign: "right" }}>Fundings</th>
-              <th style={{ ...th, textAlign: "right" }}>Transfers</th>
-              <th style={th}></th>
+              <th style={tdRight}>取引</th>
+              <th style={tdRight}>ファンディング</th>
+              <th style={tdRight}>入出金</th>
+              <th style={{ ...th, textAlign: "right" }}>操作</th>
             </tr>
           </thead>
           <tbody>
             {state.rows.map((row) => {
-              const edit = editing[row.id];
-              const editingName = edit?.field === "name";
+              const hasAddress = Boolean(row.address);
               return (
                 <tr key={row.id} style={{ borderBottom: "1px solid #1a1f2c" }}>
-                  <td style={td}>
-                    {editingName ? (
-                      <EditCell
-                        value={edit.value}
-                        onChange={(v) =>
-                          setEditing((prev) => ({
-                            ...prev,
-                            [row.id]: { field: "name", value: v },
-                          }))
-                        }
-                        onSave={() => save(row.id)}
-                        onCancel={() => cancelEdit(row.id)}
-                      />
-                    ) : (
-                      <span style={{ color: COLORS.text, fontWeight: 500 }}>
-                        {row.name}
-                      </span>
-                    )}
+                  <td style={{ ...td, color: COLORS.text, fontWeight: 500 }}>
+                    {row.name}
                   </td>
                   <td
                     style={{
                       ...td,
                       fontFamily: "monospace",
-                      color: row.address ? COLORS.muted : COLORS.faint,
+                      color: hasAddress ? COLORS.muted : COLORS.faint,
                     }}
                     title={
-                      row.address
-                        ? "アドレスは登録後に変更できません (変更には削除→再追加が必要)"
-                        : "CSV 取り込みで自動作成されたアカウントのためアドレス未設定"
+                      hasAddress
+                        ? row.address
+                        : "アドレス未設定 (CSV取込のみ利用可)"
                     }
                   >
-                    {row.address || "(未設定)"}
+                    {hasAddress ? shortAddress(row.address) : "(未設定)"}
                   </td>
                   <td style={tdRight}>{row.trades}</td>
                   <td style={tdRight}>{row.fundings}</td>
                   <td style={tdRight}>{row.transfers}</td>
                   <td style={tdRight}>
-                    {edit ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => save(row.id)}
-                          disabled={busy === row.id}
-                          style={btnPrimary}
-                        >
-                          保存
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => cancelEdit(row.id)}
-                          style={btnGhost}
-                        >
-                          キャンセル
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <SyncButton
-                          row={row}
-                          status={syncStates[row.id] ?? { status: "idle" }}
-                          month={
-                            syncMonths[row.id] ?? defaultSyncMonth()
-                          }
-                          onChangeMonth={(v) =>
-                            setSyncMonths((prev) => ({
-                              ...prev,
-                              [row.id]: v,
-                            }))
-                          }
-                          onSync={() => handleSync(row)}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setCsvModalAccount(row)}
-                          style={btnGhost}
-                          title="このアカウントに CSV を取り込む"
-                        >
-                          CSV取込
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => startEdit(row.id, "name", row.name)}
-                          style={btnGhost}
-                        >
-                          名前を編集
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeAccount(row)}
-                          disabled={busy === row.id}
-                          style={btnDanger}
-                        >
-                          削除
-                        </button>
-                      </>
-                    )}
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 6,
+                        justifyContent: "flex-end",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setModal({ type: "sync", account: row })}
+                        disabled={!hasAddress}
+                        style={hasAddress ? btnGhost : btnGhostDisabled}
+                        title={
+                          hasAddress
+                            ? "Hyperliquid 公式 API から同期"
+                            : "アドレス未設定のため同期できません"
+                        }
+                      >
+                        同期
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setModal({ type: "csv", account: row })}
+                        style={btnGhost}
+                        title="このアカウントに CSV を取り込む"
+                      >
+                        CSV取込
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setModal({ type: "edit", account: row })}
+                        style={btnGhost}
+                      >
+                        編集
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeAccount(row)}
+                        disabled={busy === row.id}
+                        style={btnDanger}
+                      >
+                        削除
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -468,108 +265,34 @@ export function Accounts() {
         </table>
       )}
 
-      {csvModalAccount && (
+      {modal?.type === "create" && (
+        <AccountFormModal
+          onClose={() => setModal(null)}
+          onSaved={reload}
+        />
+      )}
+      {modal?.type === "edit" && (
+        <AccountFormModal
+          account={modal.account}
+          onClose={() => setModal(null)}
+          onSaved={reload}
+        />
+      )}
+      {modal?.type === "sync" && (
+        <AccountSyncModal
+          accountName={modal.account.name}
+          address={modal.account.address}
+          onClose={() => setModal(null)}
+          onSynced={reload}
+        />
+      )}
+      {modal?.type === "csv" && (
         <AccountCsvImportModal
-          accountName={csvModalAccount.name}
-          onClose={() => setCsvModalAccount(null)}
+          accountName={modal.account.name}
+          onClose={() => setModal(null)}
           onImported={reload}
         />
       )}
     </div>
   );
 }
-
-function SyncButton({
-  row,
-  status,
-  month,
-  onChangeMonth,
-  onSync,
-}: {
-  row: AccountRow;
-  status: SyncStatus;
-  month: string;
-  onChangeMonth: (v: string) => void;
-  onSync: () => void;
-}) {
-  const hasAddress = Boolean(row.address);
-  const running = status.status === "running";
-  const disabled = !hasAddress || running;
-  return (
-    <span
-      style={{ display: "inline-flex", alignItems: "center", gap: 6, marginRight: 6 }}
-    >
-      <input
-        type="month"
-        value={month}
-        disabled={!hasAddress || running}
-        onChange={(e) => onChangeMonth(e.target.value)}
-        style={{ ...baseInput, padding: "0.25rem 0.4rem", fontSize: "0.82rem" }}
-        title="同期の対象月 (JST)。月初〜月末を取得"
-      />
-      <button
-        type="button"
-        onClick={onSync}
-        disabled={disabled}
-        style={disabled ? btnDisabled : btnPrimary}
-        title={
-          hasAddress
-            ? `${month} の 1 ヶ月分を Hyperliquid 公式 API から同期`
-            : "アドレス未設定"
-        }
-      >
-        {running ? "同期中..." : "同期 (1ヶ月)"}
-      </button>
-      {status.status === "done" && (
-        <span style={{ fontSize: "0.78rem", color: COLORS.muted }}>
-          ✅ 取引 +{status.result.trades.inserted}, Funding +
-          {status.result.fundings.inserted}, 入出金 +
-          {status.result.transfers.inserted}
-          {status.result.warnings.length > 0 && (
-            <span
-              title={status.result.warnings.join("\n")}
-              style={{ color: COLORS.warn, marginLeft: 4 }}
-            >
-              ⚠️ {status.result.warnings.length}
-            </span>
-          )}
-        </span>
-      )}
-      {status.status === "error" && (
-        <span
-          title={status.message}
-          style={{ fontSize: "0.78rem", color: COLORS.neg }}
-        >
-          ❌ 同期失敗
-        </span>
-      )}
-    </span>
-  );
-}
-
-function EditCell({
-  value,
-  onChange,
-  onSave,
-  onCancel,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  onSave: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <input
-      autoFocus
-      type="text"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") onSave();
-        if (e.key === "Escape") onCancel();
-      }}
-      style={inputStyle}
-    />
-  );
-}
-

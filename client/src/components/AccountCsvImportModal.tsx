@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Dropzone } from "./Dropzone";
+import { Modal } from "./Modal";
 import { StagedFileCard, type StagedFile } from "./StagedFileCard";
 import {
   detectCsvKind,
@@ -10,7 +11,7 @@ import {
   type ParsedRow,
 } from "../lib/csv";
 import { commitGroup, type CommitGroupResult } from "../lib/persistence";
-import { btnGhost, btnPrimary, COLORS } from "../styles";
+import { btnPrimary, COLORS } from "../styles";
 
 type RawFile = StagedFile & { rawText: string };
 
@@ -54,14 +55,6 @@ export function AccountCsvImportModal({
   const [commitState, setCommitState] = useState<CommitState>({
     status: "idle",
   });
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const handleFiles = async (incoming: File[]) => {
     const next: RawFile[] = await Promise.all(
@@ -159,62 +152,31 @@ export function AccountCsvImportModal({
   const committing = commitState.status === "running";
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.6)",
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "center",
-        padding: "3rem 1rem",
-        zIndex: 100,
-        overflowY: "auto",
-      }}
+    <Modal
+      maxWidth={640}
+      onClose={onClose}
+      title={
+        <>
+          CSV取込{" "}
+          <span style={{ color: COLORS.muted, fontWeight: 400 }}>
+            — {accountName}
+          </span>
+        </>
+      }
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
+      <p
         style={{
-          background: COLORS.bg,
-          border: `1px solid ${COLORS.border}`,
-          borderRadius: 10,
-          padding: "1.5rem",
-          width: "100%",
-          maxWidth: 640,
+          color: COLORS.subtle,
+          fontSize: "0.85rem",
+          marginTop: 0,
+          marginBottom: 14,
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "baseline",
-            justifyContent: "space-between",
-            gap: "1rem",
-          }}
-        >
-          <h2 style={{ margin: 0, fontSize: "1.1rem" }}>
-            CSV取込{" "}
-            <span style={{ color: COLORS.muted, fontWeight: 400 }}>
-              — {accountName}
-            </span>
-          </h2>
-          <button type="button" onClick={onClose} style={btnGhost}>
-            閉じる
-          </button>
-        </div>
-        <p
-          style={{
-            color: COLORS.subtle,
-            fontSize: "0.85rem",
-            marginTop: 8,
-            marginBottom: 14,
-          }}
-        >
-          Hyperliquid からエクスポートした CSV
-          (取引履歴・ファンディング・入出金) をこのアカウントに取り込みます。
-        </p>
+        Hyperliquid からエクスポートした CSV
+        (取引履歴・ファンディング・入出金) をこのアカウントに取り込みます。
+      </p>
 
-        <Dropzone onFiles={handleFiles} />
+      <Dropzone onFiles={handleFiles} />
 
         {commitState.status === "error" && (
           <div
@@ -297,7 +259,6 @@ export function AccountCsvImportModal({
             ))}
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   );
 }
