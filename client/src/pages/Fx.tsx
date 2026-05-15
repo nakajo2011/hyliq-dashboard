@@ -186,7 +186,7 @@ export function Fx() {
   if (tradeCount === 0) {
     return (
       <div>
-        <h1 style={{ marginTop: 0 }}>FX レート (USD/JPY)</h1>
+        <h1 style={{ marginTop: 0 }}>為替レート (USD/JPY)</h1>
         <div
           style={{
             ...section,
@@ -202,7 +202,7 @@ export function Fx() {
           </p>
           <p style={{ marginTop: 12, marginBottom: 0 }}>
             <Link
-              to="/upload"
+              to="/settings/accounts"
               style={{
                 display: "inline-block",
                 background: COLORS.primary,
@@ -213,7 +213,7 @@ export function Fx() {
                 fontSize: "0.9rem",
               }}
             >
-              Upload ページへ
+              アカウント設定へ
             </Link>
           </p>
         </div>
@@ -237,7 +237,7 @@ export function Fx() {
           gap: "1rem",
         }}
       >
-        <h1 style={{ marginTop: 0 }}>FX レート (USD/JPY)</h1>
+        <h1 style={{ marginTop: 0 }}>為替レート (USD/JPY)</h1>
         <div style={{ fontSize: "0.88rem", color: COLORS.muted }}>
           ソース:{" "}
           <strong style={{ color: COLORS.text }}>{SOURCE_LABEL[source]}</strong>

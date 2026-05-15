@@ -97,7 +97,7 @@ export function AccountDetail() {
   if (state.status === "not-found")
     return (
       <p>
-        アカウントが見つかりません。<Link to="/accounts">一覧へ戻る</Link>
+        アカウントが見つかりません。<Link to="/">収支へ戻る</Link>
       </p>
     );
   if (state.status === "error")
@@ -137,8 +137,8 @@ function AccountDetailReady({
   return (
     <div>
       <div style={{ marginBottom: "1rem" }}>
-        <Link to="/accounts" style={{ color: "#6cf" }}>
-          ← Accounts
+        <Link to="/" style={{ color: "#6cf" }}>
+          ← 収支
         </Link>
       </div>
       <h1 style={{ marginTop: 0, wordBreak: "break-all" }}>{account.name}</h1>

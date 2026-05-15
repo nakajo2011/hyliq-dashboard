@@ -141,16 +141,20 @@ function EmptyState() {
         <h2 style={{ marginTop: 0 }}>はじめかた</h2>
         <ol style={{ lineHeight: 1.8 }}>
           <li>
-            Hyperliquid の Web 管理画面から CSV をエクスポート
-            (trade_history / funding_history / deposits_and_withdrawals)
+            <Link to="/settings/accounts" style={{ color: "#6cf" }}>
+              設定 → アカウント
+            </Link>{" "}
+            でアカウントを作成 (アドレスを登録すると Hyperliquid 公式 API
+            から直接同期できます)
           </li>
           <li>
-            <Link to="/upload" style={{ color: "#6cf" }}>
-              Upload
+            または{" "}
+            <Link to="/settings/import" style={{ color: "#6cf" }}>
+              設定 → CSV取込
             </Link>{" "}
-            ページから CSV をドラッグ&ドロップ
+            から CSV をドラッグ&ドロップ
           </li>
-          <li>取り込まれたデータが Home と Accounts に表示されます</li>
+          <li>取り込まれたデータが 収支・確定申告 に表示されます</li>
         </ol>
       </div>
     </div>
@@ -216,12 +220,10 @@ function Dashboard({
         }}
       >
         <div>
-          <h1 style={{ marginTop: 0, marginBottom: 4 }}>Home</h1>
+          <h1 style={{ marginTop: 0, marginBottom: 4 }}>収支</h1>
           <p style={{ color: "#888", margin: 0 }}>
-            {accounts.length} アカウントの合算サマリ。{" "}
-            <Link to="/accounts" style={{ color: "#6cf" }}>
-              各アカウント詳細へ
-            </Link>
+            {accounts.length}{" "}
+            アカウントの合算サマリ。下の「アカウント別 内訳」から各アカウントの収支へ移動できます。
           </p>
         </div>
         <CurrencyToggle currency={currency} onChange={setCurrency} />
@@ -240,8 +242,8 @@ function Dashboard({
           }}
         >
           ⚠️ FX レート未登録の取引が {missingCount} 件あるため集計から除外しています。
-          <Link to="/fx" style={{ color: "#6cf", marginLeft: 4 }}>
-            /fx で登録
+          <Link to="/settings/fx" style={{ color: "#6cf", marginLeft: 4 }}>
+            為替レートを登録
           </Link>
         </div>
       )}

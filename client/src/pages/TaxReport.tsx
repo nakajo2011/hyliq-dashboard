@@ -169,7 +169,8 @@ export function TaxReport() {
       <div>
         <h1 style={{ marginTop: 0 }}>確定申告レポート</h1>
         <p style={{ color: "#888" }}>
-          まだ取引データがありません。<Link to="/upload">Upload</Link> から CSV を取り込んでください。
+          まだ取引データがありません。<Link to="/settings/accounts">設定 → アカウント</Link>{" "}
+          で同期するか <Link to="/settings/import">CSV取込</Link> から取り込んでください。
         </p>
       </div>
     );
@@ -330,10 +331,10 @@ function ReportView({
       <h1 style={{ marginTop: 0 }}>確定申告レポート</h1>
       <p style={{ color: "#888" }}>
         年度ごとの取引を当日 USD/JPY で円換算します。為替レートは{" "}
-        <Link to="/fx" style={{ color: "#6cf" }}>
-          FX
+        <Link to="/settings/fx" style={{ color: "#6cf" }}>
+          設定 → 為替レート
         </Link>{" "}
-        ページで登録してください。
+        で登録してください。
       </p>
 
       <div
@@ -385,8 +386,8 @@ function ReportView({
           }}
         >
           ⚠️ {report.total.missing} 件の取引が為替レート未登録です。
-          <Link to="/fx" style={{ color: "#6cf", marginLeft: 6 }}>
-            /fx で登録
+          <Link to="/settings/fx" style={{ color: "#6cf", marginLeft: 6 }}>
+            為替レートを登録
           </Link>
         </div>
       )}

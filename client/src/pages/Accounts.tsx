@@ -264,9 +264,13 @@ export function Accounts() {
 
   return (
     <div>
-      <h1 style={{ marginTop: 0 }}>Accounts</h1>
+      <h1 style={{ marginTop: 0 }}>アカウント</h1>
       <p style={{ color: "#888" }}>
-        登録済みアカウント一覧。アカウント名・アドレスはクリックで編集できます。削除時は関連データ
+        アカウントの作成・同期・削除を行います。各アカウントの収支は{" "}
+        <Link to="/" style={{ color: "#6cf" }}>
+          収支
+        </Link>{" "}
+        ページで確認できます。アカウント名はクリックで編集可。削除時は関連データ
         (trades / fundings / transfers) も cascade で削除されます。
       </p>
 
@@ -325,7 +329,8 @@ export function Accounts() {
       {state.status === "ready" && state.rows.length === 0 && (
         <p style={{ color: "#888" }}>
           まだアカウントがありません。上のフォームでアドレスを登録するか、
-          <Link to="/upload">Upload</Link> から CSV を取り込むと自動で登録されます。
+          <Link to="/settings/import">CSV取込</Link> から CSV
+          を取り込むと自動で登録されます。
         </p>
       )}
 
@@ -368,16 +373,9 @@ export function Accounts() {
                         onCancel={() => cancelEdit(row.id)}
                       />
                     ) : (
-                      <Link
-                        to={`/accounts/${row.id}`}
-                        style={{
-                          color: "#6cf",
-                          textDecoration: "none",
-                          fontWeight: 500,
-                        }}
-                      >
+                      <span style={{ color: COLORS.text, fontWeight: 500 }}>
                         {row.name}
-                      </Link>
+                      </span>
                     )}
                   </td>
                   <td

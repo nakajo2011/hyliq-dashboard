@@ -221,7 +221,7 @@ export function Upload() {
 
   return (
     <div>
-      <h1 style={{ marginTop: 0 }}>Upload</h1>
+      <h1 style={{ marginTop: 0 }}>CSV取込</h1>
       <p style={{ color: "#888" }}>
         Hyperliquid からエクスポートした CSV をアップロードして取り込みます。
         既存アカウントへの追記、または新規アカウントの登録ができます。

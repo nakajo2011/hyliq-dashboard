@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import { SettingsLayout } from "./components/SettingsLayout";
 import { Home } from "./pages/Home";
 import { Upload } from "./pages/Upload";
 import { Accounts } from "./pages/Accounts";
@@ -13,12 +14,31 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
+          {/* 収支 (analytics) */}
           <Route index element={<Home />} />
-          <Route path="upload" element={<Upload />} />
-          <Route path="accounts" element={<Accounts />} />
           <Route path="accounts/:id" element={<AccountDetail />} />
-          <Route path="fx" element={<Fx />} />
+          {/* 確定申告 */}
           <Route path="reports/tax" element={<TaxReport />} />
+          {/* 設定 (management) */}
+          <Route path="settings" element={<SettingsLayout />}>
+            <Route
+              index
+              element={<Navigate to="/settings/accounts" replace />}
+            />
+            <Route path="accounts" element={<Accounts />} />
+            <Route path="import" element={<Upload />} />
+            <Route path="fx" element={<Fx />} />
+          </Route>
+          {/* Redirects for the pre-reorg routes (old bookmarks). */}
+          <Route
+            path="accounts"
+            element={<Navigate to="/settings/accounts" replace />}
+          />
+          <Route
+            path="upload"
+            element={<Navigate to="/settings/import" replace />}
+          />
+          <Route path="fx" element={<Navigate to="/settings/fx" replace />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
