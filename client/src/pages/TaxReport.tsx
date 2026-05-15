@@ -170,7 +170,7 @@ export function TaxReport() {
         <h1 style={{ marginTop: 0 }}>確定申告レポート</h1>
         <p style={{ color: "#888" }}>
           まだ取引データがありません。<Link to="/settings/accounts">設定 → アカウント</Link>{" "}
-          で同期するか <Link to="/settings/import">CSV取込</Link> から取り込んでください。
+          で同期または CSV取込 を行ってください。
         </p>
       </div>
     );

@@ -148,11 +148,8 @@ function EmptyState() {
             から直接同期できます)
           </li>
           <li>
-            または{" "}
-            <Link to="/settings/import" style={{ color: "#6cf" }}>
-              設定 → CSV取込
-            </Link>{" "}
-            から CSV をドラッグ&ドロップ
+            または同じ「設定 → アカウント」ページ下部の「CSV取込」から
+            CSV をドラッグ&ドロップ
           </li>
           <li>取り込まれたデータが 収支・確定申告 に表示されます</li>
         </ol>

@@ -20,7 +20,6 @@ const tabStyle = ({ isActive }: { isActive: boolean }): CSSProperties => ({
 
 const TABS = [
   { to: "/settings/accounts", label: "アカウント" },
-  { to: "/settings/import", label: "CSV取込" },
   { to: "/settings/fx", label: "為替レート" },
 ];
 

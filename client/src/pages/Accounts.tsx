@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { pb } from "../lib/pb";
+import { CsvImportSection } from "../components/CsvImportSection";
 import {
   isHyperliquidAddress,
   syncFromHyperliquid,
@@ -329,8 +330,7 @@ export function Accounts() {
       {state.status === "ready" && state.rows.length === 0 && (
         <p style={{ color: "#888" }}>
           まだアカウントがありません。上のフォームでアドレスを登録するか、
-          <Link to="/settings/import">CSV取込</Link> から CSV
-          を取り込むと自動で登録されます。
+          下の「CSV取込」から CSV を取り込むと自動で登録されます。
         </p>
       )}
 
@@ -454,6 +454,8 @@ export function Accounts() {
           </tbody>
         </table>
       )}
+
+      <CsvImportSection onImported={reload} />
     </div>
   );
 }

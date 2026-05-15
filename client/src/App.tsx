@@ -2,7 +2,6 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { SettingsLayout } from "./components/SettingsLayout";
 import { Home } from "./pages/Home";
-import { Upload } from "./pages/Upload";
 import { Accounts } from "./pages/Accounts";
 import { AccountDetail } from "./pages/AccountDetail";
 import { Fx } from "./pages/Fx";
@@ -19,14 +18,13 @@ function App() {
           <Route path="accounts/:id" element={<AccountDetail />} />
           {/* 確定申告 */}
           <Route path="reports/tax" element={<TaxReport />} />
-          {/* 設定 (management) */}
+          {/* 設定 (management). CSV取込 lives inside the アカウント page. */}
           <Route path="settings" element={<SettingsLayout />}>
             <Route
               index
               element={<Navigate to="/settings/accounts" replace />}
             />
             <Route path="accounts" element={<Accounts />} />
-            <Route path="import" element={<Upload />} />
             <Route path="fx" element={<Fx />} />
           </Route>
           {/* Redirects for the pre-reorg routes (old bookmarks). */}
@@ -36,7 +34,11 @@ function App() {
           />
           <Route
             path="upload"
-            element={<Navigate to="/settings/import" replace />}
+            element={<Navigate to="/settings/accounts" replace />}
+          />
+          <Route
+            path="settings/import"
+            element={<Navigate to="/settings/accounts" replace />}
           />
           <Route path="fx" element={<Navigate to="/settings/fx" replace />} />
         </Route>

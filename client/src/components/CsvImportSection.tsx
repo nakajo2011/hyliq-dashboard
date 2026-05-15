@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from "react";
-import { Dropzone } from "../components/Dropzone";
-import { StagedFileCard, type StagedFile } from "../components/StagedFileCard";
+import { Dropzone } from "./Dropzone";
+import { StagedFileCard, type StagedFile } from "./StagedFileCard";
 import { pb } from "../lib/pb";
 import {
   detectCsvKind,
@@ -11,6 +11,7 @@ import {
   type ParsedRow,
 } from "../lib/csv";
 import { commitGroup, type CommitGroupResult } from "../lib/persistence";
+import { COLORS, h2, section } from "../styles";
 
 type RawFile = StagedFile & { rawText: string };
 
@@ -41,7 +42,16 @@ interface ExistingAccount {
   name: string;
 }
 
-export function Upload() {
+/**
+ * CSV import as an embeddable section of the アカウント settings page
+ * (was a standalone page). `onImported` lets the host page refresh its
+ * account list after a successful commit.
+ */
+export function CsvImportSection({
+  onImported,
+}: {
+  onImported?: () => void;
+}) {
   const [files, setFiles] = useState<RawFile[]>([]);
   const [commitState, setCommitState] = useState<CommitState>({
     status: "idle",
@@ -205,6 +215,7 @@ export function Upload() {
 
       setCommitState({ status: "done", results });
       setFiles([]);
+      onImported?.();
     } catch (e) {
       setCommitState({
         status: "error",
@@ -220,11 +231,18 @@ export function Upload() {
   );
 
   return (
-    <div>
-      <h1 style={{ marginTop: 0 }}>CSV取込</h1>
-      <p style={{ color: "#888" }}>
-        Hyperliquid からエクスポートした CSV をアップロードして取り込みます。
-        既存アカウントへの追記、または新規アカウントの登録ができます。
+    <section style={section}>
+      <h2 style={h2}>CSV取込</h2>
+      <p
+        style={{
+          color: COLORS.subtle,
+          fontSize: "0.85rem",
+          marginTop: 0,
+          marginBottom: 12,
+        }}
+      >
+        Hyperliquid からエクスポートした CSV を取り込みます。既存アカウントへの
+        追記、または新規アカウントの登録ができます。
       </p>
 
       <Dropzone onFiles={handleFiles} />
@@ -264,10 +282,7 @@ export function Upload() {
                 <strong>{r.accountName}</strong> / {KIND_LABEL[r.kind]}: 新規{" "}
                 {r.inserted} 件、重複スキップ {r.skippedDuplicates} 件
                 {r.failed > 0 && (
-                  <span style={{ color: "#ff6b6b" }}>
-                    {" "}
-                    / 失敗 {r.failed} 件
-                  </span>
+                  <span style={{ color: "#ff6b6b" }}> / 失敗 {r.failed} 件</span>
                 )}
                 {r.errors.length > 0 && (
                   <details style={{ marginTop: 4 }}>
@@ -315,7 +330,9 @@ export function Upload() {
               justifyContent: "space-between",
             }}
           >
-            <h2 style={{ margin: 0 }}>ステージング中のファイル</h2>
+            <h3 style={{ margin: 0, fontSize: "0.95rem", color: COLORS.muted }}>
+              ステージング中のファイル
+            </h3>
             <button
               type="button"
               disabled={readyCount === 0 || commitState.status === "running"}
@@ -363,6 +380,6 @@ export function Upload() {
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }
