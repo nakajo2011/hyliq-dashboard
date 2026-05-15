@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   Bar,
   BarChart,
@@ -13,7 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { pb } from "../lib/pb";
-import { table, td, tdRight, th, trHead, trRow } from "../styles";
+import { COLORS, table, td, tdRight, th, trHead, trRow } from "../styles";
 import {
   buildAccountStats,
   buildCoinPnL,
@@ -36,6 +36,12 @@ interface AccountRecord {
   note: string;
 }
 
+/** Minimal shape for the account-switcher dropdown. */
+interface AccountListItem {
+  id: string;
+  name: string;
+}
+
 type TradeRow = TradeLike & { id: string; ntl: number };
 type FundingRow = FundingLike & { id: string; sz: number; side: string };
 type TransferRow = TransferLike & { id: string; taxable: boolean };
@@ -45,6 +51,7 @@ type LoadState =
   | {
       status: "ready";
       account: AccountRecord;
+      allAccounts: AccountListItem[];
       trades: TradeRow[];
       fundings: FundingRow[];
       transfers: TransferRow[];
@@ -65,7 +72,11 @@ export function AccountDetail() {
           .collection("accounts")
           .getOne<AccountRecord>(id);
         const filter = `account = "${id}"`;
-        const [trades, fundings, transfers] = await Promise.all([
+        const [allAccounts, trades, fundings, transfers] = await Promise.all([
+          pb.collection("accounts").getFullList<AccountListItem>({
+            sort: "name",
+            fields: "id,name",
+          }),
           pb
             .collection("trades")
             .getFullList<TradeRow>({ filter, sort: "+time" }),
@@ -77,7 +88,14 @@ export function AccountDetail() {
             .getFullList<TransferRow>({ filter, sort: "+time" }),
         ]);
         if (cancelled) return;
-        setState({ status: "ready", account, trades, fundings, transfers });
+        setState({
+          status: "ready",
+          account,
+          allAccounts,
+          trades,
+          fundings,
+          transfers,
+        });
       } catch (e) {
         if (cancelled) return;
         const msg = e instanceof Error ? e.message : String(e);
@@ -108,6 +126,7 @@ export function AccountDetail() {
 
 interface ReadyProps {
   account: AccountRecord;
+  allAccounts: AccountListItem[];
   trades: TradeRow[];
   fundings: FundingRow[];
   transfers: TransferRow[];
@@ -115,6 +134,7 @@ interface ReadyProps {
 
 function AccountDetailReady({
   account,
+  allAccounts,
   trades,
   fundings,
   transfers,
@@ -141,7 +161,9 @@ function AccountDetailReady({
           ← 収支
         </Link>
       </div>
-      <h1 style={{ marginTop: 0, wordBreak: "break-all" }}>{account.name}</h1>
+      <h1 style={{ marginTop: 0, marginBottom: 6, wordBreak: "break-all" }}>
+        <AccountSwitcher current={account} accounts={allAccounts} />
+      </h1>
       {account.address && (
         <div
           style={{
@@ -238,6 +260,122 @@ function AccountDetailReady({
         )}
       </Section>
 
+    </div>
+  );
+}
+
+/**
+ * Heading-styled account name that, when clicked, drops down a list of all
+ * accounts to switch to. Inherits the surrounding <h1> font.
+ */
+function AccountSwitcher({
+  current,
+  accounts,
+}: {
+  current: AccountRecord;
+  accounts: AccountListItem[];
+}) {
+  const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
+  const ref = useRef<HTMLDivElement>(null);
+  const single = accounts.length <= 1;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
+      <button
+        type="button"
+        onClick={() => !single && setOpen((o) => !o)}
+        disabled={single}
+        title={single ? undefined : "クリックでアカウントを切り替え"}
+        style={{
+          font: "inherit",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 8,
+          background: "transparent",
+          border: "none",
+          padding: 0,
+          color: COLORS.text,
+          cursor: single ? "default" : "pointer",
+          textAlign: "left",
+        }}
+      >
+        {current.name}
+        {!single && (
+          <span style={{ fontSize: "0.55em", color: COLORS.muted }}>▼</span>
+        )}
+      </button>
+      {open && (
+        <ul
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            marginTop: 6,
+            listStyle: "none",
+            padding: 4,
+            background: COLORS.panel,
+            border: `1px solid ${COLORS.border}`,
+            borderRadius: 8,
+            minWidth: 220,
+            maxHeight: 320,
+            overflowY: "auto",
+            zIndex: 50,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+          }}
+        >
+          {accounts.map((a) => {
+            const isCurrent = a.id === current.id;
+            return (
+              <li key={a.id}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    if (!isCurrent) navigate(`/accounts/${a.id}`);
+                  }}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "0.5rem 0.7rem",
+                    background: isCurrent ? COLORS.panelAlt : "transparent",
+                    color: isCurrent ? "#fff" : COLORS.muted,
+                    border: "none",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    fontSize: "0.95rem",
+                  }}
+                >
+                  {a.name}
+                  {isCurrent && (
+                    <span
+                      style={{
+                        color: COLORS.subtle,
+                        marginLeft: 6,
+                        fontSize: "0.78rem",
+                      }}
+                    >
+                      (表示中)
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
