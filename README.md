@@ -1,6 +1,6 @@
 # Hyliq Dashboard
 
-Hyperliquid からエクスポートした取引 CSV（Perpetuals）を取り込み、損益を可視化・確定申告用に JPY 換算するための個人用 Web アプリ。
+Hyperliquid (Perpetuals) の取引データを **公式 API での自動同期** または **CSV 取り込み** で取得し、損益を可視化・確定申告用に JPY 換算するための個人用 Web アプリ。
 
 ## 画面
 
