@@ -21,17 +21,21 @@ const KIND_LABEL: Record<CsvKind, string> = {
 
 interface Props {
   file: StagedFile;
+  /**
+   * When omitted, the account-name combobox is hidden — the account is
+   * fixed by the caller (e.g. the per-account CSV import modal).
+   */
+  onChangeAccountName?: (id: string, name: string) => void;
   /** Names of accounts already in the DB, suggested in the combobox. */
-  existingNames: string[];
+  existingNames?: string[];
   /** datalist id to wire the combobox up to the shared options list. */
-  datalistId: string;
-  onChangeAccountName: (id: string, name: string) => void;
+  datalistId?: string;
   onRemove: (id: string) => void;
 }
 
 export function StagedFileCard({
   file,
-  existingNames,
+  existingNames = [],
   datalistId,
   onChangeAccountName,
   onRemove,
@@ -87,38 +91,40 @@ export function StagedFileCard({
         </button>
       </div>
 
-      <div style={{ marginTop: "0.8rem" }}>
-        <label style={{ fontSize: "0.85rem", color: "#aab" }}>
-          アカウント名{" "}
-          {file.accountName.trim() && (
-            <span
-              style={{
-                color: isExisting ? "#5dd58c" : "#f5b942",
-                fontSize: "0.78rem",
-              }}
-            >
-              ({isExisting ? "既存アカウント" : "新規アカウント"})
-            </span>
-          )}
-        </label>
-        <input
-          type="text"
-          list={datalistId}
-          value={file.accountName}
-          onChange={(e) => onChangeAccountName(file.id, e.target.value)}
-          placeholder="既存アカウントを選択、または新しいアカウント名を入力"
-          style={{
-            display: "block",
-            width: "100%",
-            marginTop: 4,
-            padding: "0.45rem 0.6rem",
-            background: "#0f1218",
-            color: "#e6e6e6",
-            border: "1px solid #2a3047",
-            borderRadius: 6,
-          }}
-        />
-      </div>
+      {onChangeAccountName && (
+        <div style={{ marginTop: "0.8rem" }}>
+          <label style={{ fontSize: "0.85rem", color: "#aab" }}>
+            アカウント名{" "}
+            {file.accountName.trim() && (
+              <span
+                style={{
+                  color: isExisting ? "#5dd58c" : "#f5b942",
+                  fontSize: "0.78rem",
+                }}
+              >
+                ({isExisting ? "既存アカウント" : "新規アカウント"})
+              </span>
+            )}
+          </label>
+          <input
+            type="text"
+            list={datalistId}
+            value={file.accountName}
+            onChange={(e) => onChangeAccountName(file.id, e.target.value)}
+            placeholder="既存アカウントを選択、または新しいアカウント名を入力"
+            style={{
+              display: "block",
+              width: "100%",
+              marginTop: 4,
+              padding: "0.45rem 0.6rem",
+              background: "#0f1218",
+              color: "#e6e6e6",
+              border: "1px solid #2a3047",
+              borderRadius: 6,
+            }}
+          />
+        </div>
+      )}
 
       <div style={{ marginTop: "0.8rem", fontSize: "0.9rem" }}>
         {file.status === "detecting" && <span>解析中...</span>}

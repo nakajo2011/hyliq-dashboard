@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { pb } from "../lib/pb";
-import { CsvImportSection } from "../components/CsvImportSection";
+import { AccountCsvImportModal } from "../components/AccountCsvImportModal";
 import {
   isHyperliquidAddress,
   syncFromHyperliquid,
@@ -136,6 +136,10 @@ export function Accounts() {
   const [adding, setAdding] = useState(false);
   /** Per-row sync target month ("YYYY-MM", JST). Window = the entire month. */
   const [syncMonths, setSyncMonths] = useState<Record<string, string>>({});
+  /** Account currently shown in the CSV import modal (null = closed). */
+  const [csvModalAccount, setCsvModalAccount] = useState<AccountRow | null>(
+    null
+  );
 
   const reload = async () => {
     setState({ status: "loading" });
@@ -267,7 +271,8 @@ export function Accounts() {
     <div>
       <h1 style={{ marginTop: 0 }}>アカウント</h1>
       <p style={{ color: "#888" }}>
-        アカウントの作成・同期・削除を行います。各アカウントの収支は{" "}
+        まずアカウントを登録し、各アカウントに対して「同期」または「CSV取込」で
+        取引データを取得します。各アカウントの収支は{" "}
         <Link to="/" style={{ color: "#6cf" }}>
           収支
         </Link>{" "}
@@ -280,8 +285,9 @@ export function Accounts() {
           新規アカウント追加
         </h2>
         <p style={{ color: COLORS.subtle, fontSize: "0.82rem", marginTop: 0, marginBottom: 12 }}>
-          アドレスを登録すると、Hyperliquid 公式 API
-          から直近 7 日分の取引・Funding・入出金を「同期」ボタンで取り込めます (PoC)。
+          アドレスを登録すると、登録後に各行の「同期」ボタンで Hyperliquid
+          公式 API から月単位で取引データを取得できます。アドレスなしでも作成でき、
+          その場合は「CSV取込」のみ利用できます。
         </p>
         <div
           style={{
@@ -329,8 +335,7 @@ export function Accounts() {
 
       {state.status === "ready" && state.rows.length === 0 && (
         <p style={{ color: "#888" }}>
-          まだアカウントがありません。上のフォームでアドレスを登録するか、
-          下の「CSV取込」から CSV を取り込むと自動で登録されます。
+          まだアカウントがありません。上のフォームで作成してください。
         </p>
       )}
 
@@ -432,6 +437,14 @@ export function Accounts() {
                         />
                         <button
                           type="button"
+                          onClick={() => setCsvModalAccount(row)}
+                          style={btnGhost}
+                          title="このアカウントに CSV を取り込む"
+                        >
+                          CSV取込
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => startEdit(row.id, "name", row.name)}
                           style={btnGhost}
                         >
@@ -455,7 +468,13 @@ export function Accounts() {
         </table>
       )}
 
-      <CsvImportSection onImported={reload} />
+      {csvModalAccount && (
+        <AccountCsvImportModal
+          accountName={csvModalAccount.name}
+          onClose={() => setCsvModalAccount(null)}
+          onImported={reload}
+        />
+      )}
     </div>
   );
 }
