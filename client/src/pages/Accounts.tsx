@@ -4,6 +4,7 @@ import { pb } from "../lib/pb";
 import { AccountCreateModal } from "../components/AccountCreateModal";
 import { AccountCsvImportModal } from "../components/AccountCsvImportModal";
 import { AccountSyncModal } from "../components/AccountSyncModal";
+import { CheckIcon, CopyIcon, PencilIcon, TrashIcon } from "../components/icons";
 import {
   btnGhost,
   btnGhostDisabled,
@@ -76,37 +77,22 @@ function shortAddress(addr: string): string {
   return `${addr.slice(0, 8)}…${addr.slice(-6)}`;
 }
 
-const iconDangerBtn: CSSProperties = {
+const iconBtn: CSSProperties = {
   background: "transparent",
-  border: `1px solid ${COLORS.dangerBorder}`,
+  border: `1px solid ${COLORS.border}`,
   borderRadius: 6,
-  padding: "0.35rem 0.45rem",
+  padding: "0.3rem 0.4rem",
   cursor: "pointer",
-  color: COLORS.neg,
+  color: COLORS.muted,
   display: "inline-flex",
   alignItems: "center",
 };
 
-function TrashIcon() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-      <line x1="10" y1="11" x2="10" y2="17" />
-      <line x1="14" y1="11" x2="14" y2="17" />
-    </svg>
-  );
-}
+const iconDangerBtn: CSSProperties = {
+  ...iconBtn,
+  borderColor: COLORS.dangerBorder,
+  color: COLORS.neg,
+};
 
 type ModalState =
   | { type: "create" }
@@ -128,6 +114,8 @@ export function Accounts() {
   // Set just before blur when the user pressed Escape, so the shared blur
   // handler can tell "cancel" apart from "commit".
   const escapeRef = useRef(false);
+  // Row id whose address was just copied (shows a check for ~1.5s).
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const reload = async () => {
     try {
@@ -165,6 +153,19 @@ export function Accounts() {
       await reload();
     } catch (e) {
       alert(`保存失敗: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const copyAddress = async (row: AccountRow) => {
+    try {
+      await navigator.clipboard.writeText(row.address);
+      setCopiedId(row.id);
+      setTimeout(
+        () => setCopiedId((cur) => (cur === row.id ? null : cur)),
+        1500
+      );
+    } catch {
+      alert("クリップボードへのコピーに失敗しました");
     }
   };
 
@@ -275,32 +276,71 @@ export function Accounts() {
                       />
                     ) : (
                       <span
-                        onClick={() => startNameEdit(row)}
-                        title="クリックして名前を編集"
                         style={{
-                          color: COLORS.text,
-                          fontWeight: 500,
-                          cursor: "pointer",
-                          borderBottom: "1px dotted #555",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
                         }}
                       >
-                        {row.name}
+                        <span
+                          style={{ color: COLORS.text, fontWeight: 500 }}
+                        >
+                          {row.name}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => startNameEdit(row)}
+                          style={iconBtn}
+                          title="名前を編集"
+                        >
+                          <PencilIcon size={14} />
+                        </button>
                       </span>
                     )}
                   </td>
-                  <td
-                    style={{
-                      ...td,
-                      fontFamily: "monospace",
-                      color: hasAddress ? COLORS.muted : COLORS.faint,
-                    }}
-                    title={
-                      hasAddress
-                        ? row.address
-                        : "アドレス未設定 (CSV取込のみ利用可)"
-                    }
-                  >
-                    {hasAddress ? shortAddress(row.address) : "(未設定)"}
+                  <td style={td}>
+                    {hasAddress ? (
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontFamily: "monospace",
+                            color: COLORS.muted,
+                          }}
+                          title={row.address}
+                        >
+                          {shortAddress(row.address)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => copyAddress(row)}
+                          style={
+                            copiedId === row.id
+                              ? { ...iconBtn, color: COLORS.pos }
+                              : iconBtn
+                          }
+                          title="アドレスをコピー"
+                        >
+                          {copiedId === row.id ? (
+                            <CheckIcon size={14} />
+                          ) : (
+                            <CopyIcon size={14} />
+                          )}
+                        </button>
+                      </span>
+                    ) : (
+                      <span
+                        style={{ color: COLORS.faint }}
+                        title="アドレス未設定 (CSV取込のみ利用可)"
+                      >
+                        (未設定)
+                      </span>
+                    )}
                   </td>
                   <td style={tdRight}>{row.trades}</td>
                   <td style={tdRight}>{row.fundings}</td>
@@ -343,7 +383,7 @@ export function Accounts() {
                         style={iconDangerBtn}
                         title="このアカウントを削除"
                       >
-                        <TrashIcon />
+                        <TrashIcon size={15} />
                       </button>
                     </div>
                   </td>
