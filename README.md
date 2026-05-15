@@ -2,6 +2,18 @@
 
 Hyperliquid からエクスポートした取引 CSV（Perpetuals）を取り込み、損益を可視化・確定申告用に JPY 換算するための個人用 Web アプリ。
 
+## ⚠️ セキュリティ上の注意
+
+このリポジトリは **ローカル / 個人利用を前提** にしています。
+`pb_migrations/1748000000_default_superuser.js` に PocketBase 管理画面の
+デフォルト管理者 (`admin@local.app` / `hyliqdashboard`) が **平文でハードコード**
+されています。
+
+- このまま PocketBase を **公開ネットワークに晒さないこと**
+- 本番運用・他者との共有・恒久利用をする場合は、**必ずこのパスワードを変更**
+  するか、認証情報を環境変数 (`PB_ADMIN_PASSWORD` 等) に退避してから運用して
+  ください
+
 ## 構成
 
 - **フロント**: React + Vite + TypeScript (`client/`)
@@ -28,7 +40,8 @@ docker compose up -d
 
 これで PocketBase (8090) と Vite dev server (5173) が両方立ち上がります。
 
-- PocketBase 管理画面: <http://localhost:8090/_/> (初回は管理者作成)
+- PocketBase 管理画面: <http://localhost:8090/_/> (デフォルト管理者は migration
+  で自動作成 — 上記「セキュリティ上の注意」参照)
 - アプリ: <http://localhost:5173/>
 - `pb_migrations/` 配下の migration が自動適用、Vite は host bind mount で
   HMR (ソース変更が即反映)、`node_modules` は named volume `client_node_modules`
