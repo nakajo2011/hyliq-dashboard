@@ -110,3 +110,82 @@ export async function syncFromHyperliquid(
     warnings,
   };
 }
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** [start, end) JST ms boundaries for the current calendar month. */
+function currentMonthRangeMs(): { startMs: number; endMs: number } {
+  const jst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const y = jst.getUTCFullYear();
+  const m = jst.getUTCMonth() + 1;
+  const mm = String(m).padStart(2, "0");
+  const startMs = Date.parse(`${y}-${mm}-01T00:00:00+09:00`);
+  const ny = m === 12 ? y + 1 : y;
+  const nm = m === 12 ? 1 : m + 1;
+  const endMs = Date.parse(
+    `${ny}-${String(nm).padStart(2, "0")}-01T00:00:00+09:00`
+  );
+  return { startMs, endMs };
+}
+
+export interface SyncAllProgress {
+  /** Accounts fully finished so far. */
+  completed: number;
+  total: number;
+  /** Account currently being synced, or null between accounts. */
+  currentAccount: string | null;
+}
+
+export interface SyncAllAccountResult {
+  accountName: string;
+  ok: boolean;
+  result?: SyncResult;
+  error?: string;
+}
+
+/**
+ * Sync the current calendar month for every account that has a valid
+ * address. Accounts are processed strictly one at a time, with a delay
+ * between them, so the public API is not hammered (DoS-considerate).
+ */
+export async function syncAllAccountsCurrentMonth(
+  accounts: { name: string; address: string }[],
+  opts: { onProgress?: (p: SyncAllProgress) => void; delayMs?: number } = {}
+): Promise<SyncAllAccountResult[]> {
+  const delayMs = opts.delayMs ?? 1000;
+  const targets = accounts.filter((a) => isHyperliquidAddress(a.address));
+  const { startMs, endMs } = currentMonthRangeMs();
+  const results: SyncAllAccountResult[] = [];
+
+  for (let i = 0; i < targets.length; i++) {
+    const a = targets[i];
+    // 1s gap between accounts (not before the first).
+    if (i > 0) await sleep(delayMs);
+    opts.onProgress?.({
+      completed: i,
+      total: targets.length,
+      currentAccount: a.name,
+    });
+    try {
+      const result = await syncFromHyperliquid({
+        accountName: a.name,
+        address: a.address,
+        startTime: startMs,
+        endTime: endMs,
+      });
+      results.push({ accountName: a.name, ok: true, result });
+    } catch (e) {
+      results.push({
+        accountName: a.name,
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    opts.onProgress?.({
+      completed: i + 1,
+      total: targets.length,
+      currentAccount: null,
+    });
+  }
+  return results;
+}
