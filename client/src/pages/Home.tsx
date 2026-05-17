@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Bar,
@@ -25,8 +25,20 @@ import type {
   TransferLike,
 } from "../lib/pnl";
 import type { FxRate } from "../lib/fx";
+import {
+  syncAllAccountsCurrentMonth,
+  type SyncAllAccountResult,
+} from "../lib/hyperliquid";
 import { fmtJpy, fmtUsd } from "../lib/format";
-import { h2 as sectionTitle, td, tdRight, th } from "../styles";
+import {
+  btnDisabled,
+  btnPrimary,
+  COLORS,
+  h2 as sectionTitle,
+  td,
+  tdRight,
+  th,
+} from "../styles";
 
 interface AccountRow {
   id: string;
@@ -56,70 +68,63 @@ type State =
 export function Home() {
   const [state, setState] = useState<State>({ status: "loading" });
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        await pb.health.check();
-      } catch (err) {
-        if (!cancelled)
-          setState({
-            status: "error",
-            message: `PocketBase に接続できません (${PB_URL}): ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          });
+  const load = useCallback(async () => {
+    try {
+      await pb.health.check();
+    } catch (err) {
+      setState({
+        status: "error",
+        message: `PocketBase に接続できません (${PB_URL}): ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      });
+      return;
+    }
+
+    try {
+      const accounts = await pb
+        .collection("accounts")
+        .getFullList<AccountRow>({ sort: "name" });
+      if (accounts.length === 0) {
+        setState({ status: "no-data", healthOk: true });
         return;
       }
-
-      try {
-        const accounts = await pb
-          .collection("accounts")
-          .getFullList<AccountRow>({ sort: "name" });
-        if (accounts.length === 0) {
-          if (!cancelled) setState({ status: "no-data", healthOk: true });
-          return;
-        }
-        const [trades, fundings, transfers, fxRows] = await Promise.all([
-          pb.collection("trades").getFullList<TradeRow>({ sort: "+time" }),
-          pb.collection("fundings").getFullList<FundingRow>({ sort: "+time" }),
-          pb
-            .collection("transfers")
-            .getFullList<TransferRow>({ sort: "+time" }),
-          pb.collection("fx_rates").getFullList<FxRecord>(),
-        ]);
-        if (cancelled) return;
-        const fxRates: FxRate[] = fxRows.map((r) => ({
-          date: r.date.slice(0, 10),
-          usd_jpy: r.usd_jpy,
-        }));
-        setState({
-          status: "ready",
-          accounts,
-          trades,
-          fundings,
-          transfers,
-          fxRates,
-        });
-      } catch (e) {
-        if (cancelled) return;
-        setState({
-          status: "error",
-          message: e instanceof Error ? e.message : String(e),
-        });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      const [trades, fundings, transfers, fxRows] = await Promise.all([
+        pb.collection("trades").getFullList<TradeRow>({ sort: "+time" }),
+        pb.collection("fundings").getFullList<FundingRow>({ sort: "+time" }),
+        pb.collection("transfers").getFullList<TransferRow>({ sort: "+time" }),
+        pb.collection("fx_rates").getFullList<FxRecord>(),
+      ]);
+      const fxRates: FxRate[] = fxRows.map((r) => ({
+        date: r.date.slice(0, 10),
+        usd_jpy: r.usd_jpy,
+      }));
+      setState({
+        status: "ready",
+        accounts,
+        trades,
+        fundings,
+        transfers,
+        fxRates,
+      });
+    } catch (e) {
+      setState({
+        status: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   if (state.status === "loading") return <p>読み込み中...</p>;
   if (state.status === "error")
     return <p style={{ color: "#ff6b6b" }}>❌ {state.message}</p>;
   if (state.status === "no-data") return <EmptyState />;
 
-  return <Dashboard state={state} />;
+  return <Dashboard state={state} onReload={load} />;
 }
 
 function EmptyState() {
@@ -177,14 +182,52 @@ function jpyConvertedTrades<T extends TradeRow>(
   return { trades: kept, missing: result.missingCount };
 }
 
+type RefreshState =
+  | { phase: "idle" }
+  | { phase: "running"; completed: number; total: number; current: string | null }
+  | { phase: "done"; results: SyncAllAccountResult[] }
+  | { phase: "error"; message: string };
+
 function Dashboard({
   state,
+  onReload,
 }: {
   state: Extract<State, { status: "ready" }>;
+  onReload: () => Promise<void>;
 }) {
   const { accounts, trades, fundings, transfers, fxRates } = state;
 
   const [currency, setCurrency] = useState<Currency>("USD");
+  const [refresh, setRefresh] = useState<RefreshState>({ phase: "idle" });
+
+  const syncableCount = accounts.filter((a) => a.address).length;
+
+  const handleRefresh = async () => {
+    setRefresh({
+      phase: "running",
+      completed: 0,
+      total: syncableCount,
+      current: null,
+    });
+    try {
+      const results = await syncAllAccountsCurrentMonth(accounts, {
+        onProgress: (p) =>
+          setRefresh({
+            phase: "running",
+            completed: p.completed,
+            total: p.total,
+            current: p.currentAccount,
+          }),
+      });
+      setRefresh({ phase: "done", results });
+      await onReload();
+    } catch (e) {
+      setRefresh({
+        phase: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
 
   // Convert (or pass through) the trades based on the selected currency.
   const { displayedTrades, missingCount } = useMemo(() => {
@@ -223,8 +266,36 @@ function Dashboard({
             アカウントの合算サマリ。下の「アカウント別 内訳」から各アカウントの収支へ移動できます。
           </p>
         </div>
-        <CurrencyToggle currency={currency} onChange={setCurrency} />
+        <div
+          style={{
+            display: "flex",
+            gap: "0.8rem",
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={refresh.phase === "running" || syncableCount === 0}
+            style={
+              refresh.phase === "running" || syncableCount === 0
+                ? btnDisabled
+                : btnPrimary
+            }
+            title={
+              syncableCount === 0
+                ? "アドレス登録済みのアカウントがありません"
+                : `登録済み ${syncableCount} アカウントの今月分を Hyperliquid 公式 API から取得`
+            }
+          >
+            {refresh.phase === "running" ? "更新中..." : "最新の取引を更新"}
+          </button>
+          <CurrencyToggle currency={currency} onChange={setCurrency} />
+        </div>
       </div>
+
+      {refresh.phase !== "idle" && <RefreshPanel refresh={refresh} />}
 
       {currency === "JPY" && missingCount > 0 && (
         <div
@@ -322,6 +393,103 @@ function Dashboard({
       </section>
     </div>
   );
+}
+
+function RefreshPanel({ refresh }: { refresh: RefreshState }) {
+  const box: React.CSSProperties = {
+    marginTop: "1rem",
+    padding: "0.8rem 1rem",
+    borderRadius: 8,
+    fontSize: "0.88rem",
+  };
+
+  if (refresh.phase === "running") {
+    const pct =
+      refresh.total > 0
+        ? Math.round((refresh.completed / refresh.total) * 100)
+        : 0;
+    return (
+      <div
+        style={{
+          ...box,
+          background: COLORS.panel,
+          border: `1px solid ${COLORS.border}`,
+        }}
+      >
+        <div style={{ color: COLORS.muted, marginBottom: 8 }}>
+          アカウント {refresh.completed} / {refresh.total} を同期中
+          {refresh.current ? ` — ${refresh.current}` : "..."}
+        </div>
+        <div
+          style={{
+            height: 8,
+            borderRadius: 4,
+            background: COLORS.border,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              width: `${pct}%`,
+              height: "100%",
+              background: COLORS.primary,
+              transition: "width 0.3s ease",
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (refresh.phase === "error") {
+    return (
+      <div
+        style={{
+          ...box,
+          background: "#3b1d1d",
+          border: "1px solid #6b2a2a",
+          color: "#ffb3b3",
+        }}
+      >
+        ❌ 更新に失敗しました: {refresh.message}
+      </div>
+    );
+  }
+
+  if (refresh.phase === "done") {
+    const ok = refresh.results.filter((r) => r.ok);
+    const failed = refresh.results.filter((r) => !r.ok);
+    const totals = ok.reduce(
+      (acc, r) => {
+        if (r.result) {
+          acc.trades += r.result.trades.inserted;
+          acc.fundings += r.result.fundings.inserted;
+          acc.transfers += r.result.transfers.inserted;
+        }
+        return acc;
+      },
+      { trades: 0, fundings: 0, transfers: 0 }
+    );
+    return (
+      <div
+        style={{ ...box, background: "#15281c", border: "1px solid #2d5a3d" }}
+      >
+        <strong style={{ color: COLORS.pos }}>✅ 更新完了</strong>{" "}
+        <span style={{ color: COLORS.muted }}>
+          {ok.length} アカウント同期 — 取引 +{totals.trades}, ファンディング +
+          {totals.fundings}, 入出金 +{totals.transfers}
+        </span>
+        {failed.length > 0 && (
+          <div style={{ color: COLORS.neg, marginTop: 6 }}>
+            ⚠️ {failed.length} アカウントで失敗:{" "}
+            {failed.map((f) => f.accountName).join(", ")}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return null;
 }
 
 function CurrencyToggle({
